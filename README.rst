@@ -11,7 +11,6 @@ Table of contents:
    :local:
    :depth: 1
 
-
 .. _flyby-viz:
 
 Ouster SDK/KISS-ICP flyby visualizations
