@@ -7,20 +7,14 @@ from setuptools import setup
 
 __version__ = '0.0.1'
 
-
-with open('README.md', encoding='utf-8') as f:
-    _long_description = f.read()
-
 setup(
     name='ptudes-lab',
     version=__version__,
     description=
-    'Single/multi-lidar systems experiments with calibration, visualization and localization',
-    long_description=_long_description,
-    long_description_content_type='text/markdown',
+    'Ouster Lidar: odometry, SLAM and visualization experiments',
     author='Pavlo Bashmakov',
     author_email='157482+bexcite@users.noreply.github.com',
-    python_requires='>=3.10',
+    python_requires='>=3.8',
     packages=find_namespace_packages(where='src'),
     package_dir={'': 'src'},
     install_requires=[
