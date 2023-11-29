@@ -10,7 +10,8 @@ Ouster Lidar/SDK flyby visualizer using odometry/slam poses (Kiss-ICP based)
 
 Review the registered point cloud map using the per scan poses of the
 odometry/slam pipeline with deskewing and point coloring by ``REFLECTIVITY``,
-``NEAR_IR``, ``SIGNAL`` and ``RANGE`` channels.
+``NEAR_IR``, ``SIGNAL`` and ``RANGE`` channels (channels availability depends on
+the UDP Lidar Profile of the data).
 
 .. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/readme-kick/docs/images/flyby.png
 
@@ -22,7 +23,7 @@ Pre-requisite:
 
    You can install ``ptudes-lab`` from PyPi using::
 
-      pip install git+https://github.com/bexcite/ptudes-lab.git@pb/readme-kick#egg=ptudes-lab
+      pip install git+https://github.com/bexcite/ptudes-lab.git@main#egg=ptudes-lab
 
    or you can install directly from the source code repository::
 
@@ -40,8 +41,9 @@ Pre-requisite:
 2. Get the lidar scans poses in kitti format
 `````````````````````````````````````````````
 
-   All my experiments based on `KISS-ICP`_ outputs in kitti format. You can run
-   ``kiss-icp`` pipeline on the previously obtained Ouster ``.pcap`` data using::
+   All my experiments based on `KISS-ICP`_ poses outputs in kitti format. To get
+   the scan poses you can run ``kiss-icp`` pipeline on the previously obtained
+   Ouster ``.pcap`` data using::
 
       kiss_icp_pipeline --deskew ./OS-0-128_v3.0.1_1024x10.pcap
 
