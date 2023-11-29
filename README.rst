@@ -5,10 +5,12 @@ Ptudes Lab: Lidar odometry, SLAM and visualization tools
 This is a playground of various experiments with SLAM, mapping and visualization
 of lidar point clouds.
 
-.. contents::
-   :local:
-   :depth: 1
+.. toctree::
+   :caption: Tools/Experiments
 
+   :ref:`Ouster SDK/Kiss-ICP flyby viz <flyby-viz>`
+
+.. _flyby-viz:
 
 Ouster Lidar/SDK flyby visualizer using odometry/slam poses (Kiss-ICP based)
 ----------------------------------------------------------------------------
