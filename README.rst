@@ -9,7 +9,8 @@ Ouster Lidar/SDK flyby visualizer using odometry/slam poses (Kiss-ICP based)
 ----------------------------------------------------------------------------
 
 Review the registered point cloud map using the per scan poses of the
-odometry/slam pipeline with deskewing.
+odometry/slam pipeline with deskewing and point coloring by ``REFLECTIVITY``,
+``NEAR_IR``, ``SIGNAL`` and ``RANGE`` channels.
 
 .. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/readme-kick/docs/images/flyby.png
 
@@ -20,7 +21,7 @@ Pre-requisite:
 
    You can install ``ptudes-lab`` from PyPi using::
 
-      pip install ptudes-lab
+      pip install git+https://github.com/bexcite/ptudes-lab.git@pb/readme-kick#egg=ptudes-lab
 
    or you can install directly from the source code repository::
 
@@ -52,6 +53,18 @@ can run ``flyby`` command as::
 
     ptudes flyby ./OS-0-128_v3.0.1_1024x10.pcap --kitti-poses ./results/latest/OS-0-128_v3.0.1_poses_kitti.txt
 
+Use ``--help`` to see more options like ``--start-scan/--end-scan`` to view/fly over only a specific range.
+
 Some useful keybord shortcuts:
 
-**TBD**
+    ==============  =============================================================
+        Key         Action
+    ==============  =============================================================
+    ``SPACE``       Stop/Start flying
+    ``>``           Increase/decrease flying speed
+    ``8``           Toggle poses/trajectory view
+    ``k / K``       Cycle point cloud coloring mode of accumulated clouds or map
+    ``g / G``       Cycle point cloud color palette of accumulated clouds or map
+    ``j / J``       Increase/decrease point size of accumulated clouds or map
+    ==============  =============================================================
+
