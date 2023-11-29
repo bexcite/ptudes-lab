@@ -5,15 +5,23 @@ Ptudes Lab: Lidar odometry, SLAM and visualization tools
 This is a playground of various experiments with SLAM, mapping and visualization
 of lidar point clouds.
 
-Ouster Lidar/SDK flyby visualizer using odometry/slam poses (Kiss-ICP based)
-----------------------------------------------------------------------------
+Table of contents:
+
+.. contents::
+   :local:
+   :depth: 1
+
+.. _flyby-viz:
+
+Ouster SDK/KISS-ICP flyby visualizations
+----------------------------------------
 
 Review the registered point cloud map using the per scan poses of the
 odometry/slam pipeline with deskewing and point coloring by ``REFLECTIVITY``,
 ``NEAR_IR``, ``SIGNAL`` and ``RANGE`` channels (channels availability depends on
 the UDP Lidar Profile of the data).
 
-.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/readme-kick/docs/images/flyby.png
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/flyby.png
 
 Pre-requisite:
 ~~~~~~~~~~~~~~
