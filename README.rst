@@ -7,7 +7,7 @@ of lidar point clouds.
 
 Table of contents:
 
-- :ref:`Ouster SDK/Kiss-ICP flyby viz <flyby-viz>`
+- `Ouster SDK/Kiss-ICP flyby viz <flyby-viz>`
 
 .. _flyby-viz:
 
