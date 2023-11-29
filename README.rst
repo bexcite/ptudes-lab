@@ -58,7 +58,8 @@ can run ``flyby`` command as::
 
     ptudes flyby ./OS-0-128_v3.0.1_1024x10.pcap --kitti-poses ./results/latest/OS-0-128_v3.0.1_poses_kitti.txt
 
-Use ``--help`` to see more options like ``--start-scan/--end-scan`` to view/fly over only a specific range.
+Use ``--help`` to see more options like ``--start-scan/--end-scan`` to view only
+a specific range of scans.
 
 Some useful keybord shortcuts:
 
