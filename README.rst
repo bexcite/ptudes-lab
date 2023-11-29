@@ -18,6 +18,7 @@ Pre-requisite:
 ~~~~~~~~~~~~~~
 
 0. Installation
+````````````````
 
    You can install ``ptudes-lab`` from PyPi using::
 
@@ -28,6 +29,7 @@ Pre-requisite:
       pip install .
 
 1. Get Ouster sensor lidar data in a ``.pcap`` format
+```````````````````````````````````````````````````````
 
    You can download a sample data from the `official sensor docs`_:
 
@@ -36,6 +38,7 @@ Pre-requisite:
       ouster-cli source <MY_SENSOR_IP> record
 
 2. Get the lidar scans poses in kitti format
+`````````````````````````````````````````````
 
    All my experiments based on `KISS-ICP`_ outputs in kitti format. You can run
    ``kiss-icp`` pipeline on the previously obtained Ouster ``.pcap`` data using::
