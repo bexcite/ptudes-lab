@@ -20,7 +20,7 @@ odometry/slam pipeline with deskewing and point coloring by ``REFLECTIVITY``,
 ``NEAR_IR``, ``SIGNAL`` and ``RANGE`` channels (channels availability depends on
 the UDP Lidar Profile of the data).
 
-.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/readme-kick/docs/images/flyby.png
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/flyby.png
 
 Pre-requisite:
 ~~~~~~~~~~~~~~
