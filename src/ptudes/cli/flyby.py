@@ -64,17 +64,11 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
     poses = pu.load_kitti_poses(kitti_poses)
     scans_num = poses.shape[0]
 
+    scans = pu.pose_scans_from_kitti(scans_source, kitti_poses)
+
     start_scan = start_scan if start_scan < scans_num else scans_num - 1
     end_scan = (end_scan if end_scan is not None and end_scan < scans_num
                 and end_scan >= start_scan else scans_num - 1)
-
-    print(f"{scans_num = }")
-    print(f"{start_scan = }")
-    print(f"{end_scan = }")
-
-    scans = pu.pose_scans_from_kitti(scans_source, kitti_poses)
-
-    point_viz = make_point_viz(title="Flyby")
 
     MAP_MAX_POINTS_NUM = 1500000
     # estimate accum map ratio for the densest map
@@ -84,21 +78,8 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
         pts_per_scan = info.format.pixels_per_column * info.format.columns_per_frame
         pts_total = (end_scan - start_scan + 1) * pts_per_scan
         accum_map_ratio = min(1.0, MAP_MAX_POINTS_NUM / pts_total)
-        print(f"{pts_per_scan = }")
-        print(f"{pts_total = }")
         estimated_map_ratio = True
         click.echo(f"Estimated accum map ratio: {accum_map_ratio}")
-    scans_accum = ScansAccumulator(scans_source.metadata,
-                                   point_viz=point_viz,
-                                   map_enabled=True,
-                                   map_max_points=MAP_MAX_POINTS_NUM,
-                                   map_select_ratio=accum_map_ratio)
-
-
-    if not estimated_map_ratio:
-        scans_accum.update_point_size(1)
-
-    pause = False
 
     rates = [0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0]
     try:
@@ -108,11 +89,22 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
             f"WARNING: {rate = } is not found in {rates}, using rate = 1.0")
         rate_ind = rates.index(1.0)
 
+    point_viz = make_point_viz(title="Flyby")
+    scans_accum = ScansAccumulator(scans_source.metadata,
+                                   point_viz=point_viz,
+                                   map_enabled=True,
+                                   map_max_points=MAP_MAX_POINTS_NUM,
+                                   map_select_ratio=accum_map_ratio)
+
+    # initialize flyby osd
+    flyby_osd = Label("", 1, 1, align_right=True)
+    point_viz.add(flyby_osd)
+
+    pause = False
     osd_enabled = True
 
     def handle_keys(ctx, key, mods) -> bool:
         nonlocal pause, rate_ind, osd_enabled
-        # print(f"{key = }, {mods = }")
         if key == 32:
             pause = not pause
         elif key == ord('.') and mods == 1:
@@ -123,17 +115,14 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
             osd_enabled = not osd_enabled
             scans_accum.toggle_osd(osd_enabled)
             scans_accum.draw(update=False)
-
         return True
 
     point_viz.push_key_handler(handle_keys)
 
-    # initialize osd
-    flyby_osd = Label("", 1, 1, align_right=True)
-    point_viz.add(flyby_osd)
-
+    # min and max point in the cloud to calculate dolly
     min_max = np.zeros((3, 2))
 
+    # prepare a pruned trajectory for camera
     traj_poses = pu.make_kiss_traj_poses(poses)
     pruned_traj_poses = prune_trajectory(traj_poses,
                                          start_idx=start_scan,
@@ -141,6 +130,7 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
     coursing_traj_eval = pu.TrajectoryEvaluator(pruned_traj_poses,
                                                 time_bounds=1.0)
 
+    # the pose of the start_scan
     start_target = coursing_traj_eval._poses[0][1]
 
     def make_osd_str() -> str:
