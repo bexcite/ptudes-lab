@@ -55,6 +55,13 @@ Pre-requisite:
 
       kiss_icp_pipeline --deskew ./OS-0-128_v3.0.1_1024x10.pcap
 
+   However you can use any poses file with ``--kitti-poses`` in the command
+   ``ptudes flyby`` below and not neccessarily ``KISS-ICP`` output. For example
+   it can be the result of some post-processing step (smoothing, loop closure,
+   fusion with other sensors etc) the only requirement is that the number of
+   poses should be the same as the number of scans in the ``.pcap``.
+
+
 .. _official sensor docs: https://static.ouster.dev/sensor-docs/#sample-data
 .. _KISS-ICP: https://github.com/PRBonn/kiss-icp
 
