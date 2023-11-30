@@ -1,5 +1,6 @@
 import click
 from typing import Optional
+from pathlib import Path
 
 import numpy as np
 
@@ -13,7 +14,8 @@ from ouster.viz import (ScansAccumulator, Label)
 import ouster.viz.scans_accum as scans_accum_module
 
 from ptudes.utils import (make_point_viz, spin, estimate_apex_dolly,
-                          map_points_num, prune_trajectory)
+                          map_points_num, prune_trajectory, read_metadata_json,
+                          read_packet_source)
 
 from ptudes.fly import (FlyingState, FState, BuildingState,
                         CameraTransitionState, CoursingState)
@@ -23,13 +25,16 @@ scans_accum_module.MAP_INIT_POINTS_NUM = scans_accum_module.MAP_MAX_POINTS_NUM
 scans_accum_module.TRACK_INIT_POINTS_NUM = scans_accum_module.TRACK_MAX_POINTS_NUM
 
 @click.command(name="flyby")
-@click.argument('file', required=True, type=click.Path(exists=True))
+@click.argument(
+    'file',
+    required=True,
+    type=click.Path(exists=True))
 @click.option(
     '-m',
     '--meta',
     required=False,
     type=click.Path(exists=True, dir_okay=False, readable=True),
-    help="Metadata for PCAP, helpful if automatic metadata resolution fails")
+    help="Metadata for PCAP, required if automatic metadata resolution fails")
 @click.option('--kitti-poses',
               required=True,
               type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -49,17 +54,18 @@ scans_accum_module.TRACK_INIT_POINTS_NUM = scans_accum_module.TRACK_MAX_POINTS_N
 def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
                  rate: float, accum_map_ratio: Optional[float],
                  start_scan: int, end_scan: Optional[int]) -> None:
-    """Show the flyby of the map."""
+    """Flyby over the map.
+
+    Data is provided via FILE in Ouster raw packets formats: PCAP or BAG with lidar/imu packets"""
     meta = resolve_metadata(file, meta)
     if not meta:
         raise click.ClickException(
             "File not found, please specify a metadata file with `-m`")
-    with open(meta) as json:
-        click.echo(f"Reading metadata from: {meta}")
-        info = client.SensorInfo(json.read())
+    print(f"Reading metadata from: {meta}")
+    info = read_metadata_json(meta)
 
-    source = pcap.Pcap(file, info)
-    scans_source = client.Scans(source)
+    packet_source = read_packet_source(file, meta=info)
+    scans_source = client.Scans(packet_source)
 
     poses = pu.load_kitti_poses(kitti_poses)
     scans_num = poses.shape[0]
