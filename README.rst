@@ -29,31 +29,37 @@ Pre-requisite:
 0. Installation
 ````````````````
 
-   You can install ``ptudes-lab`` from PyPi using::
+You can install ``ptudes-lab`` from PyPi using::
 
-      pip install git+https://github.com/bexcite/ptudes-lab.git@main#egg=ptudes-lab
+    pip install git+https://github.com/bexcite/ptudes-lab.git@main#egg=ptudes-lab
 
-   or you can install directly from the source code repository::
+or you can install directly from the source code repository::
 
-      pip install .
+    pip install .
 
 1. Get Ouster sensor lidar data in a ``.pcap`` format
 ```````````````````````````````````````````````````````
 
-   You can download a sample data from the `official sensor docs`_:
+You can download a sample data from the `official sensor docs`_:
 
-   Or you can record it from the sensor if you have one, using ``ouster-sdk/cli``::
+Or you can record it from the sensor if you have one, using ``ouster-sdk/cli``::
 
-      ouster-cli source <MY_SENSOR_IP> record
+    ouster-cli source <MY_SENSOR_IP> record
 
 2. Get the lidar scans poses in kitti format
 `````````````````````````````````````````````
 
-   All my experiments based on `KISS-ICP`_ poses outputs in kitti format. To get
-   the scan poses you can run ``kiss-icp`` pipeline on the previously obtained
-   Ouster ``.pcap`` data using::
+All my experiments based on `KISS-ICP`_ poses outputs in kitti format. To get
+the scan poses you can run ``kiss-icp`` pipeline on the previously obtained
+Ouster ``.pcap`` data using::
 
-      kiss_icp_pipeline --deskew ./OS-0-128_v3.0.1_1024x10.pcap
+    kiss_icp_pipeline --deskew ./OS-0-128_v3.0.1_1024x10.pcap
+
+However you can use any poses file with ``--kitti-poses`` in the command
+``ptudes flyby`` below and not neccessarily ``KISS-ICP`` output. For example
+it can be the result of some post-processing step (smoothing, loop closure,
+fusion with other sensors etc) the only requirement is that the number of
+poses should be the same as the number of scans in the ``.pcap``.
 
 .. _official sensor docs: https://static.ouster.dev/sensor-docs/#sample-data
 .. _KISS-ICP: https://github.com/PRBonn/kiss-icp
@@ -71,14 +77,14 @@ a specific range of scans.
 
 Some useful keybord shortcuts:
 
-    ==============  =============================================================
-        Key         Action
-    ==============  =============================================================
-    ``SPACE``       Stop/Start flying
-    ``>``           Increase/decrease flying speed
-    ``8``           Toggle poses/trajectory view
-    ``k / K``       Cycle point cloud coloring mode of accumulated clouds or map
-    ``g / G``       Cycle point cloud color palette of accumulated clouds or map
-    ``j / J``       Increase/decrease point size of accumulated clouds or map
-    ==============  =============================================================
+==============  =============================================================
+Key             Action
+==============  =============================================================
+``SPACE``       Stop/Start flying
+``>``           Increase/decrease flying speed
+``8``           Toggle poses/trajectory view
+``k / K``       Cycle point cloud coloring mode of accumulated clouds or map
+``g / G``       Cycle point cloud color palette of accumulated clouds or map
+``j / J``       Increase/decrease point size of accumulated clouds or map
+==============  =============================================================
 

@@ -1,12 +1,19 @@
 from typing import Optional, Callable
 
+import os
+import glob
+import json
 import numpy as np
+from pathlib import Path
 
 import weakref
+import ouster.client as client
 import ouster.viz as viz
+import ouster.pcap as pcap
 from ouster.viz import (PointViz, ScansAccumulator, add_default_controls)
 import ouster.sdk.pose_util as pu
 
+from ptudes.bag import OusterRawBagSource
 
 def spin(pviz: PointViz,
          on_update: Callable[[PointViz, float], None],
@@ -129,3 +136,37 @@ def prune_trajectory(traj_poses: pu.TrajPoses,
         # print(f"idx = {end_idx + 1}")
     # print(f"{len(pruned_poses) = }, {len(traj_poses) = }")
     return pu.make_kiss_traj_poses([p for _, p in pruned_poses])
+
+
+def read_metadata_json(meta_path: str) -> Optional[client.SensorInfo]:
+    with open(meta_path) as json_file:
+        json_str = json_file.read()
+        js = json.loads(json_str)
+        # HACK: backfill lidar mode to make newer college dataset 2020
+        # beam_extrinsics parseable by ouster-sdk :()
+        if ("beam_altitude_angles" in js and "beam_azimuth_angles" in js
+                and "lidar_mode" not in js):
+            print("WARNING: lidar_mode is not present in legacy metadata "
+                  f"'{meta_path}' so using lidar_mode: 1024x10")
+            js["lidar_mode"] = "1024x10"
+        return client.SensorInfo(json.dumps(js))
+
+
+def read_packet_source(
+        file_path: str,
+        meta: Optional[client.SensorInfo] = None) -> client.PacketSource:
+    """Open PCAP of BAG based Ouster raw packet source."""
+
+    file = Path(file_path)
+    if file.is_file():
+        if file.suffix == ".pcap":
+            return pcap.Pcap(file_path, meta)
+        elif file.suffix == ".bag":
+            print(f"bag file = {file_path}")
+            return OusterRawBagSource(file, meta)
+    elif file.is_dir():
+        # TODO: natural sort? for newer college dataset is not needed
+        # so maybe some time later
+        bags_paths = sorted(
+            [Path(p) for p in glob.glob(str(Path(file) / "*.bag"))])
+        return OusterRawBagSource(bags_paths, meta)
