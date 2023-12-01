@@ -39,13 +39,19 @@ Pre-requisite:
 0. Installation
 ````````````````
 
-You can install ``ptudes-lab`` from the source code repo using::
+You can install ``ptudes-lab`` using Pip from the source code repo directly
+using::
 
     pip install git+https://github.com/bexcite/ptudes-lab.git@main#egg=ptudes-lab
 
 or you can install it in editable mode if you plan to modify the code::
 
+    git clone https://github.com/bexcite/ptudes-lab.git
+    cd ptudes-lab
     pip install -e .
+
+NOTE: Don't forget to use `venv` or any other means of controlling the Python
+environments, they always saves a lot of time later down the road.
 
 1. Get Ouster sensor lidar data in a ``.pcap/.bag`` format
 ```````````````````````````````````````````````````````
