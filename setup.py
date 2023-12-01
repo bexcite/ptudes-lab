@@ -10,11 +10,10 @@ __version__ = '0.0.1'
 setup(
     name='ptudes-lab',
     version=__version__,
-    description=
-    'Ouster Lidar: odometry, SLAM and visualization experiments',
+    description='Ptudes lab: odometry, SLAM and visualization experiments',
     author='Pavlo Bashmakov',
     author_email='157482+bexcite@users.noreply.github.com',
-    python_requires='>=3.8',
+    python_requires='>=3.8, <3.12',
     packages=find_namespace_packages(where='src'),
     package_dir={'': 'src'},
     install_requires=[
