@@ -5,6 +5,9 @@ Ptudes Lab: Lidar odometry, SLAM and visualization tools
 This is a playground of various experiments with SLAM, mapping and visualization
 of lidar point clouds.
 
+It's heavily using and relying on Ouster sensor lidar data using Ouster SDK, datasets that contain
+Ouster lidar data and lidar odometry poses from `KISS-ICP`_ package.
+
 Table of contents:
 
 .. contents::
@@ -13,8 +16,8 @@ Table of contents:
 
 .. _flyby-viz:
 
-Ouster SDK/KISS-ICP flyby visualizations
-----------------------------------------
+Flyby 3d visualizations of lidar data with poses
+-------------------------------------------------
 
 Review the registered point cloud map using the per scan poses of the
 odometry/slam pipeline with deskewing and point coloring by ``REFLECTIVITY``,
@@ -67,10 +70,18 @@ poses should be the same as the number of scans in the ``.pcap``.
 How to run:
 ~~~~~~~~~~~
 
-Once you have Ouster ``.pcap`` data and poses per every scan in kitti format you
-can run ``flyby`` command as::
+Once you have Ouster sensor ``.pcap`` data and poses per every scan in kitti
+format you can run ``flyby`` command as::
 
     ptudes flyby ./OS-0-128_v3.0.1_1024x10.pcap --kitti-poses ./results/latest/OS-0-128_v3.0.1_poses_kitti.txt
+
+or for example using ``.bag`` from `Newer College`_ dataset:
+
+    ptudes flyby ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
+        --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json \
+        --kitti-poses ./2021-07-01-10-37-38-quad-easy_poses_kitti.txt \
+        --start-scan 20 \
+        --end-scan 50
 
 Use ``--help`` to see more options like ``--start-scan/--end-scan`` to view only
 a specific range of scans.
@@ -88,3 +99,26 @@ Key             Action
 ``j / J``       Increase/decrease point size of accumulated clouds or map
 ==============  =============================================================
 
+.. _Newer College: https://ori-drs.github.io/newer-college-dataset/
+
+
+ROS bags (ROS1/ROS2) visualizations of raw lidar data
+------------------------------------------------------
+
+Ouster sensors produce raw ``lidar_packets/imu_packets`` data in a corresponding
+ROS topics. To view the point cloud from such raw packes BAGs without spinning a
+ROS and installing all drivers one can use ``ptudes viz`` command.
+
+For example to visualize `Newer College` dataset BAGS use::
+
+    ptudes viz ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
+        --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json
+
+Since the underlying Viz is the `PointViz`_ shipped with Ouster SDK the full
+list of keyboard shortcuts can be found `here`_
+
+.. _PointViz: https://static.ouster.dev/sdk-docs/python/viz/index.html
+.. _here: https://static.ouster.dev/sdk-docs/sample-data.html
+
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/bags-viz/docs/images/viz_nc_bag.png
+    :caption: Newer College Dataset single BAG file visualization
