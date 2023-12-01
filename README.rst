@@ -109,8 +109,8 @@ Ouster sensors produce raw ``lidar_packets/imu_packets`` data in a corresponding
 ROS topics. To view the point cloud from such raw packets BAGs without spinning a
 ROS and installing all drivers one can use ``ptudes viz`` command.
 
-.. admonition: Not tested with ROS2 bags:(
-
+    Not tested with ROS2 bags:(
+    
     I wasn't been able to locate the ROS2 bag with raw Ouster ``lidar_packets``,
     so if you by any chance have such a ROS2 bag that you can share with me I
     can make sure that both ROS1 and ROS2 bags working for the ``ptudes viz``
