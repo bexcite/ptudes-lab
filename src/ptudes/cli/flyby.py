@@ -1,12 +1,9 @@
 import click
 from typing import Optional
-from pathlib import Path
 
 import numpy as np
 
-from ouster.cli.core import cli
 import ouster.client as client
-import ouster.pcap as pcap
 from ouster.sdk.util import resolve_metadata
 import ouster.sdk.pose_util as pu
 from ouster.viz import (ScansAccumulator, Label)
@@ -54,7 +51,7 @@ scans_accum_module.TRACK_INIT_POINTS_NUM = scans_accum_module.TRACK_MAX_POINTS_N
 def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
                  rate: float, accum_map_ratio: Optional[float],
                  start_scan: int, end_scan: Optional[int]) -> None:
-    """Flyby over the map.
+    """Flyby 3d visualizer over the lidar scans with poses.
 
     Data is provided via FILE in Ouster raw packets formats: PCAP or BAG with lidar/imu packets"""
     meta = resolve_metadata(file, meta)
