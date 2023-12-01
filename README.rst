@@ -7,8 +7,10 @@ of lidar point clouds.
 
 It's heavily using and relying on Ouster sensor lidar data using Ouster SDK,
 datasets that contain Ouster lidar data and lidar odometry poses from
-`KISS-ICP`_ package. Everything works for multi Python (3.8 - 3.11) and multi OS
-(Linux, MacOS, Windows).
+`KISS-ICP`_ package.
+
+Everything in ``ptudes-lab`` package works for multi Python (3.8 - 3.11) and
+multi OS (Linux, MacOS, Windows).
 
 Table of contents:
 
