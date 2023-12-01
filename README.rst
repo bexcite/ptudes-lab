@@ -5,8 +5,10 @@ Ptudes Lab: Lidar odometry, SLAM and visualization tools
 This is a playground of various experiments with SLAM, mapping and visualization
 of lidar point clouds.
 
-It's heavily using and relying on Ouster sensor lidar data using Ouster SDK, datasets that contain
-Ouster lidar data and lidar odometry poses from `KISS-ICP`_ package.
+It's heavily using and relying on Ouster sensor lidar data using Ouster SDK,
+datasets that contain Ouster lidar data and lidar odometry poses from
+`KISS-ICP`_ package. Everything works for multi Python (3.8 - 3.11) and multi OS
+(Linux, MacOS, Windows).
 
 Table of contents:
 
@@ -122,7 +124,8 @@ For example to visualize `Newer College` dataset BAGS use::
     ptudes viz ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
         --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json
 
-.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/bags-viz/docs/images/viz_nc_bag.png
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/viz_nc_bag.png
+
 
 Since the underlying Viz is the `PointViz`_ shipped with Ouster SDK the full
 list of keyboard shortcuts can be found `here`_
