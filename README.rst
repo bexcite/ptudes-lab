@@ -8,8 +8,8 @@ derived from `Etude`_)
 
 .. _Etude: https://en.wikipedia.org/wiki/%C3%89tude
 
-It's heavily using and relying on Ouster sensor lidar data using Ouster SDK,
-datasets that contain Ouster lidar data and lidar odometry poses from
+It's heavily using and relying on Ouster sensor lidar data, Ouster SDK, public
+datasets that contain Ouster lidar data and lidar odometry poses obtained from
 `KISS-ICP`_ package.
 
 Everything in ``ptudes-lab`` package works for multi Python (3.8 - 3.11) and
