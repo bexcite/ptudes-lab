@@ -115,7 +115,6 @@ def prune_trajectory(traj_poses: pu.TrajPoses,
         f"{start_idx = } and {end_idx = } should be lt {len(traj_poses) = }"
 
     pruned_poses = [traj_poses[start_idx]]
-    # print(f"idx = {start_idx}")
     last_pose_inv = np.linalg.inv(pruned_poses[0][1])
     idx = start_idx + 1
     for tp in traj_poses[idx:end_idx+1]:
@@ -124,8 +123,6 @@ def prune_trajectory(traj_poses: pu.TrajPoses,
         pda = np.linalg.norm(pd[:3])
         pdm = np.linalg.norm(pd[3:])
         if pda > min_dist_angle * np.pi / 180 or pdm > min_dist_m or idx == end_idx:
-            # print(f"{idx = }, {pd = }")
-            # print(f"{pda = }, {pdm = }")
             pruned_poses.append(tp)
             last_pose_inv = np.linalg.inv(p)
         idx += 1
@@ -133,8 +130,6 @@ def prune_trajectory(traj_poses: pu.TrajPoses,
     # one for traj evaluator to work ...
     if len(pruned_poses) < 2 and end_idx + 1 < len(traj_poses):
         pruned_poses.append(traj_poses[end_idx + 1])
-        # print(f"idx = {end_idx + 1}")
-    # print(f"{len(pruned_poses) = }, {len(traj_poses) = }")
     return pu.make_kiss_traj_poses([p for _, p in pruned_poses])
 
 
