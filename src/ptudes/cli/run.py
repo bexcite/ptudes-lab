@@ -5,7 +5,7 @@ from ptudes.cli.viz import ptudes_viz
 
 @click.group(name="ptudes")
 def ptudes_cli() -> None:
-    """Ptudes (point tudes) - viz, slam and mapping playground.
+    """P(oint) (e)Tudes - viz, slam and mapping playground.
 
     Various experiments with mainly Ouster Lidar and other sensors.
     """

@@ -3,7 +3,7 @@ Ptudes Lab: Lidar odometry, SLAM and visualization tools
 =========================================================
 
 This is a playground of various experiments with SLAM, mapping and visualization
-of lidar point clouds. (``Ptudes`` name is an interplay of ``P(oint) tudes``,
+of lidar point clouds. (``Ptudes`` name is an interplay of ``P(oint) (e)Tudes``,
 derived from `Etude`_)
 
 .. _Etude: https://en.wikipedia.org/wiki/%C3%89tude
