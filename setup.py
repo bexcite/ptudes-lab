@@ -19,6 +19,7 @@ setup(
     install_requires=[
         'numpy >= 1.20',
         'ouster-sdk >= 0.10.0',
+        'rosbags >= 0.9.16'
     ],
     entry_points={'console_scripts': ['ptudes=ptudes.cli.run:main']},
     url='https://github.com/bexcite/ptudes-lab',
