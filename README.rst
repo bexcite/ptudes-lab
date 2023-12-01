@@ -122,10 +122,12 @@ For example to visualize `Newer College` dataset BAGS use::
     ptudes viz ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
         --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json
 
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/bags-viz/docs/images/viz_nc_bag.png
+
 Since the underlying Viz is the `PointViz`_ shipped with Ouster SDK the full
 list of keyboard shortcuts can be found `here`_
 
 .. _PointViz: https://static.ouster.dev/sdk-docs/python/viz/index.html
 .. _here: https://static.ouster.dev/sdk-docs/sample-data.html#id1
 
-.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/bags-viz/docs/images/viz_nc_bag.png
+
