@@ -1,15 +1,15 @@
-=========================================================
-Ptudes Lab: Lidar odometry, SLAM and visualization tools
-=========================================================
+==================================================================
+P(oint) (e)Tudes Lab: Lidar odometry, SLAM and visualization tools
+==================================================================
 
 This is a playground of various experiments with SLAM, mapping and visualization
-of lidar point clouds. (``Ptudes`` name is an interplay of ``P(oint) tudes``,
+of lidar point clouds. (``Ptudes`` name is an interplay of ``P(oint) (e)Tudes``,
 derived from `Etude`_)
 
 .. _Etude: https://en.wikipedia.org/wiki/%C3%89tude
 
-It's heavily using and relying on Ouster sensor lidar data using Ouster SDK,
-datasets that contain Ouster lidar data and lidar odometry poses from
+It's heavily using and relying on Ouster sensor lidar data, Ouster SDK, public
+datasets that contain Ouster lidar data and lidar odometry poses obtained from
 `KISS-ICP`_ package.
 
 Everything in ``ptudes-lab`` package works for multi Python (3.8 - 3.11) and
@@ -39,13 +39,19 @@ Pre-requisite:
 0. Installation
 ````````````````
 
-You can install ``ptudes-lab`` from the source code repo using::
+You can install ``ptudes-lab`` using Pip from the source code repo directly
+using::
 
     pip install git+https://github.com/bexcite/ptudes-lab.git@main#egg=ptudes-lab
 
 or you can install it in editable mode if you plan to modify the code::
 
+    git clone https://github.com/bexcite/ptudes-lab.git
+    cd ptudes-lab
     pip install -e .
+
+NOTE: Don't forget to use `venv` or any other means of controlling the Python
+environments, they always saves a lot of time later down the road.
 
 1. Get Ouster sensor lidar data in a ``.pcap/.bag`` format
 ```````````````````````````````````````````````````````
