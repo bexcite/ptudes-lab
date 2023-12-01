@@ -3,7 +3,10 @@ Ptudes Lab: Lidar odometry, SLAM and visualization tools
 =========================================================
 
 This is a playground of various experiments with SLAM, mapping and visualization
-of lidar point clouds.
+of lidar point clouds. (``Ptudes`` name is an interplay of ``P(oint) tudes``,
+derived from `Etude`_)
+
+.. _Etude: https://en.wikipedia.org/wiki/%C3%89tude
 
 It's heavily using and relying on Ouster sensor lidar data using Ouster SDK,
 datasets that contain Ouster lidar data and lidar odometry poses from
@@ -36,13 +39,13 @@ Pre-requisite:
 0. Installation
 ````````````````
 
-You can install ``ptudes-lab`` from PyPi using::
+You can install ``ptudes-lab`` from the source code repo using::
 
     pip install git+https://github.com/bexcite/ptudes-lab.git@main#egg=ptudes-lab
 
-or you can install directly from the source code repository::
+or you can install it in editable mode if you plan to modify the code::
 
-    pip install .
+    pip install -e .
 
 1. Get Ouster sensor lidar data in a ``.pcap/.bag`` format
 ```````````````````````````````````````````````````````
