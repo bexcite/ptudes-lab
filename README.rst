@@ -40,7 +40,7 @@ or you can install directly from the source code repository::
 
     pip install .
 
-1. Get Ouster sensor lidar data in a ``.pcap`` format
+1. Get Ouster sensor lidar data in a ``.pcap/.bag`` format
 ```````````````````````````````````````````````````````
 
 You can download a sample data from the `official sensor docs`_:
@@ -58,11 +58,11 @@ Ouster ``.pcap`` data using::
 
     kiss_icp_pipeline --deskew ./OS-0-128_v3.0.1_1024x10.pcap
 
-However you can use any poses file with ``--kitti-poses`` in the command
-``ptudes flyby`` below and not neccessarily ``KISS-ICP`` output. For example
-it can be the result of some post-processing step (smoothing, loop closure,
-fusion with other sensors etc) the only requirement is that the number of
-poses should be the same as the number of scans in the ``.pcap``.
+You can use any poses source with ``--kitti-poses`` in the command ``ptudes
+flyby`` below and not neccessarily ``KISS-ICP`` output. For example it can be
+the result of some post-processing step (smoothing, loop closure, fusion with
+other sensors etc) the only requirement is that the number of poses should be
+the same as the number of scans in the ``.pcap/.bag`` file.
 
 .. _official sensor docs: https://static.ouster.dev/sensor-docs/#sample-data
 .. _KISS-ICP: https://github.com/PRBonn/kiss-icp
@@ -70,12 +70,12 @@ poses should be the same as the number of scans in the ``.pcap``.
 How to run:
 ~~~~~~~~~~~
 
-Once you have Ouster sensor ``.pcap`` data and poses per every scan in kitti
-format you can run ``flyby`` command as::
+Once you have Ouster sensor ``.pcap/.bag`` data and poses per every scan in kitti
+format you can run ``ptudes flyby`` command as::
 
     ptudes flyby ./OS-0-128_v3.0.1_1024x10.pcap --kitti-poses ./results/latest/OS-0-128_v3.0.1_poses_kitti.txt
 
-or for example using ``.bag`` from `Newer College`_ dataset:
+or for example using ``.bag`` from `Newer College`_ dataset::
 
     ptudes flyby ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
         --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json \
@@ -86,7 +86,7 @@ or for example using ``.bag`` from `Newer College`_ dataset:
 Use ``--help`` to see more options like ``--start-scan/--end-scan`` to view only
 a specific range of scans.
 
-Some useful keybord shortcuts:
+Some useful keybord shortcuts for ``flyby`` command:
 
 ==============  =============================================================
 Key             Action
@@ -106,7 +106,7 @@ ROS bags (ROS1/ROS2) visualizations of raw lidar data
 ------------------------------------------------------
 
 Ouster sensors produce raw ``lidar_packets/imu_packets`` data in a corresponding
-ROS topics. To view the point cloud from such raw packes BAGs without spinning a
+ROS topics. To view the point cloud from such raw packets BAGs without spinning a
 ROS and installing all drivers one can use ``ptudes viz`` command.
 
 For example to visualize `Newer College` dataset BAGS use::
@@ -118,7 +118,6 @@ Since the underlying Viz is the `PointViz`_ shipped with Ouster SDK the full
 list of keyboard shortcuts can be found `here`_
 
 .. _PointViz: https://static.ouster.dev/sdk-docs/python/viz/index.html
-.. _here: https://static.ouster.dev/sdk-docs/sample-data.html
+.. _here: https://static.ouster.dev/sdk-docs/sample-data.html#id1
 
 .. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/bags-viz/docs/images/viz_nc_bag.png
-    :caption: Newer College Dataset single BAG file visualization
