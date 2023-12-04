@@ -51,7 +51,7 @@ or you can install it in editable mode if you plan to modify the code::
     pip install -e .
 
 NOTE: Don't forget to use `venv` or any other means of controlling the Python
-environments, they always saves a lot of time later down the road.
+environments, they always save a lot of time later down the road.
 
 1. Get Ouster sensor lidar data in a ``.pcap/.bag`` format
 ```````````````````````````````````````````````````````
@@ -65,14 +65,14 @@ Or you can record it from the sensor if you have one, using ``ouster-sdk/cli``::
 2. Get the lidar scans poses in kitti format
 `````````````````````````````````````````````
 
-All my experiments based on `KISS-ICP`_ poses outputs in kitti format. To get
+All my experiments based on `KISS-ICP`_ pose outputs in KITTI format. To get
 the scan poses you can run ``kiss-icp`` pipeline on the previously obtained
 Ouster ``.pcap`` data using::
 
     kiss_icp_pipeline --deskew ./OS-0-128_v3.0.1_1024x10.pcap
 
-You can use any poses source with ``--kitti-poses`` in the command ``ptudes
-flyby`` below and not neccessarily ``KISS-ICP`` output. For example it can be
+You can use any pose source with ``--kitti-poses`` in the command ``ptudes
+flyby`` below and not necessarily ``KISS-ICP`` output. For example it can be
 the result of some post-processing step (smoothing, loop closure, fusion with
 other sensors etc) the only requirement is that the number of poses should be
 the same as the number of scans in the ``.pcap/.bag`` file.
@@ -83,8 +83,8 @@ the same as the number of scans in the ``.pcap/.bag`` file.
 How to run:
 ~~~~~~~~~~~
 
-Once you have Ouster sensor ``.pcap/.bag`` data and poses per every scan in kitti
-format you can run ``ptudes flyby`` command as::
+Once you have Ouster sensor ``.pcap/.bag`` data and poses per every scan in
+KITTI format you can run ``ptudes flyby`` command as::
 
     ptudes flyby ./OS-0-128_v3.0.1_1024x10.pcap --kitti-poses ./results/latest/OS-0-128_v3.0.1_poses_kitti.txt
 
@@ -99,7 +99,7 @@ or for example using ``.bag`` from `Newer College`_ dataset::
 Use ``--help`` to see more options like ``--start-scan/--end-scan`` to view only
 a specific range of scans.
 
-Some useful keybord shortcuts for ``flyby`` command:
+Some useful keyboard shortcuts for ``flyby`` command:
 
 ==============  =============================================================
 Key             Action
@@ -118,7 +118,7 @@ Key             Action
 ROS bags visualizations of raw lidar data
 ------------------------------------------------------
 
-Ouster sensors produce raw ``lidar_packets/imu_packets`` data in a corresponding
+Ouster sensors produce raw ``lidar_packets/imu_packets`` data in corresponding
 ROS topics. To view the point cloud from such raw packets BAGs without spinning a
 ROS and installing all drivers one can use ``ptudes viz`` command.
 

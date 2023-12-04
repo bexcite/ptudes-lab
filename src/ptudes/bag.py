@@ -7,7 +7,7 @@ from rosbags.highlevel import AnyReader
 
 import ouster.client as client
 
-# Adopted from Ouster SDK:
+# Adopted from Ouster SDK with changes to work on all platforms:
 # https://github.com/ouster-lidar/ouster_example/blob/master/python/src/ouster/sdkx/bag.py
 
 # Ouster ROS PacketMsg MD5 sum
