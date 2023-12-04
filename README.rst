@@ -87,12 +87,12 @@ How to run:
 Once you have Ouster sensor ``.pcap/.bag`` data and poses per every scan in
 KITTI format you can run ``ptudes flyby`` command as::
 
-    ptudes flyby ./OS-0-128_v3.0.1_1024x10.pcap --kitti-poses ./results/latest/OS-0-128_v3.0.1_poses_kitti.txt
+    ptudes flyby ./OS-0-128_v3.0.1_1024x10.pcap --kitti-poses ./OS-0-128_v3.0.1_poses_kitti.txt
 
 or for example using ``.bag`` from `Newer College`_ dataset::
 
     ptudes flyby ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
-        --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json \
+        --meta ./newer-college/2021-ouster-os0-128-alphasense/beam_intrinsics_os0-128.json \
         --kitti-poses ./2021-07-01-10-37-38-quad-easy_poses_kitti.txt \
         --start-scan 20 \
         --end-scan 50
@@ -134,7 +134,7 @@ ROS and installing all drivers one can use ``ptudes viz`` command.
 For example to visualize `Newer College` dataset BAGS use::
 
     ptudes viz ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
-        --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json
+        --meta ./newer-college/2021-ouster-os0-128-alphasense/beam_intrinsics_os0-128.json
 
 and it will open:
 
