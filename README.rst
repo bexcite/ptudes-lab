@@ -39,12 +39,13 @@ Pre-requisite:
 0. Installation
 ````````````````
 
-You can install ``ptudes-lab`` using Pip from the source code repo directly
+You can install ``ptudes-lab`` using Pip from the PyPi
 using::
 
-    pip install git+https://github.com/bexcite/ptudes-lab.git@main#egg=ptudes-lab
+    pip install ptudes-lab
 
-or you can install it in editable mode if you plan to modify the code::
+or you can install it in editable mode if you plan to modify the code (or want
+to use not yet released features)::
 
     git clone https://github.com/bexcite/ptudes-lab.git
     cd ptudes-lab
@@ -54,7 +55,7 @@ NOTE: Don't forget to use `venv` or any other means of controlling the Python
 environments, they always save a lot of time later down the road.
 
 1. Get Ouster sensor lidar data in a ``.pcap/.bag`` format
-```````````````````````````````````````````````````````
+```````````````````````````````````````````````````````````
 
 You can download a sample data from the `official sensor docs`_:
 
@@ -135,6 +136,7 @@ For example to visualize `Newer College` dataset BAGS use::
     ptudes viz ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
         --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json
 
+and it will open:
 .. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/viz_nc_bag.png
 
 
