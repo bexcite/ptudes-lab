@@ -157,7 +157,6 @@ def read_packet_source(
         if file.suffix == ".pcap":
             return pcap.Pcap(file_path, meta)
         elif file.suffix == ".bag":
-            print(f"bag file = {file_path}")
             return OusterRawBagSource(file, meta)
     elif file.is_dir():
         # TODO: natural sort? for newer college dataset is not needed
