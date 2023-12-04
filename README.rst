@@ -137,6 +137,7 @@ For example to visualize `Newer College` dataset BAGS use::
         --meta ~/data/newer-college/2021-ouster-os0-128-alphasense//beam_intrinsics_os0-128.json
 
 and it will open:
+
 .. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/viz_nc_bag.png
 
 
