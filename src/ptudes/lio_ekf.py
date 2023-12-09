@@ -1,11 +1,14 @@
 from typing import Optional, Iterable, Union
 
 import numpy as np
+from copy import deepcopy
 
 from ouster.client import (SensorInfo, LidarScan, ChanField, FieldTypes,
                            UDPProfileLidar)
 import ouster.client._client as _client
 import ouster.client as client
+
+from ouster.sdk.pose_util import exp_rot_vec
 
 from dataclasses import dataclass
 
@@ -44,9 +47,9 @@ class IMU:
     def from_packet(imu_packet: client.ImuPacket, prev_ts: Optional[float] = None) -> "IMU":
         imu = IMU()
         imu.ts = imu_packet.sys_ts / 10**9
-        imu.lacc = imu_packet.accel
+        imu.lacc = GRAV * imu_packet.accel
         imu.avel = imu_packet.angular_vel
-        dt = 0.1
+        dt = 0.01
         if prev_ts is not None:
             if imu.ts - prev_ts < dt:
                 dt = imu.ts - prev_ts
@@ -61,6 +64,9 @@ class LioEkf:
 
         self._sensor_to_imu = np.linalg.inv(
             self._metadata.imu_to_sensor_transform)
+
+        self._g_fn = GRAV * np.array([0, 0, -1])
+
         self._start_ts = -1
 
         # self._last_imup_ts = -1
@@ -73,11 +79,51 @@ class LioEkf:
         self._imu_prev = IMU()
         self._imu_curr = IMU()
 
+        self._initialized = False
+
         print(f"init: nav_pre  = {self._nav_prev}")
         print(f"init: nav_curr = {self._nav_curr}")
 
     def _insMech(self):
-        pass
+        print(f"nav_prev = {self._nav_prev}")
+        print(f"nav_curr = {self._nav_curr}")
+
+        print(f"imu_prev = {self._imu_prev}")
+        print(f"imu_curr = {self._imu_curr}")
+
+
+        imucurr_vel = self._imu_curr.lacc * self._imu_curr.dt
+        imucurr_angle = self._imu_curr.avel * self._imu_curr.dt
+        imupre_vel = self._imu_prev.lacc * self._imu_prev.dt
+        imupre_angle = self._imu_prev.avel * self._imu_prev.dt
+
+        p1 = np.cross(imucurr_angle, imucurr_vel) / 2   #  1/2 * (w(k) x a(k) * s(k)^2)
+        p2 = np.cross(imupre_angle, imucurr_vel) / 12   #  1/12 * (w(k-1) x a(k)) * s(k)^2
+        p3 = np.cross(imupre_vel, imucurr_angle) / 12   #  1/12 * (a(k-1) x w(k)) * s(k)^2
+
+        delta_v_fb = imucurr_vel + p1 + p2 + p3
+
+        delta_v_fn = self._nav_prev.att_h @ delta_v_fb
+
+        # gravity vel part
+        delta_vgrav = self._g_fn * self._imu_curr.dt
+
+        print(f"delta_grav = {delta_vgrav}")
+        print(f"delta_v_fn  = {delta_v_fn}")
+
+        self._nav_curr.vel = self._nav_prev.vel + delta_vgrav + delta_v_fn
+
+        self._nav_curr.pos = self._nav_prev.pos + 0.5 * (self._nav_curr.vel + self._nav_prev.vel)
+
+        rot_vec_b = imucurr_angle + np.cross(imupre_angle, imucurr_angle)
+        self._nav_curr.att_h = self._nav_prev.att_h @ exp_rot_vec(rot_vec_b)
+
+        print(f"after velocity: {self._nav_curr.vel = }")
+        print(f"after position: {self._nav_curr.pos = }")
+        print(f"after rotation:\n {self._nav_curr.att_h}\n")
+
+
+
 
     def processImuPacket(self, imu_packet: client.ImuPacket) -> None:
         imu_ts = imu_packet.sys_ts
@@ -92,11 +138,24 @@ class LioEkf:
         self._imu_curr.lacc -= self._nav_curr.bias_acc
         self._imu_curr.avel -= self._nav_curr.bias_gyr
 
+        if not self._initialized:
+            self._initialized = True
+            return
+
         self._insMech()
 
-        print(f"ts: {imu_ts}, local_ts: {local_ts:.6f}, "
-              f"processImu: {self._imu_curr = }")
-        print(f"  prev: {self._imu_prev = }")
+        self._nav_prev = deepcopy(self._nav_curr)
+
+
+        # cov predict
+        #
+
+        # print(f"ts: {imu_ts}, local_ts: {local_ts:.6f}, "
+        #       f"processImu: {self._imu_curr = }")
+        
+        print(f"processImu: acc={self._imu_curr.lacc}, gyr={self._imu_curr.avel}")
+        
+        print(f"      prev: acc={self._imu_prev.lacc}, gyr={self._imu_prev.avel}")
 
         # if self._last_imup_ts < 0:
         #     self._last_imup_ts = local_ts
@@ -180,7 +239,7 @@ class LioEkfScans(client.ScanSource):
                 self._lio_ekf.processImuPacket(packet)
                 imu_cnt += 1
 
-            if imu_cnt > 5:
+            if imu_cnt > 20:
                 exit(0)
 
 
