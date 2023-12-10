@@ -49,11 +49,14 @@ class IMU:
     dt: float = 0
 
     @staticmethod
-    def from_packet(imu_packet: client.ImuPacket, prev_ts: Optional[float] = None) -> "IMU":
+    def from_packet(imu_packet: client.ImuPacket, prev_ts: Optional[float] = None, _intr_rot: Optional[np.ndarray] = None) -> "IMU":
         imu = IMU()
         imu.ts = imu_packet.sys_ts / 10**9
         imu.lacc = GRAV * imu_packet.accel
         imu.avel = imu_packet.angular_vel
+        if _intr_rot is not None:
+            imu.lacc = _intr_rot @ imu.lacc
+            imu.avel = _intr_rot @ imu.avel
         dt = 0.01
         if prev_ts is not None:
             if imu.ts - prev_ts < dt:
@@ -70,6 +73,9 @@ class LioEkf:
         self._sensor_to_imu = np.linalg.inv(
             self._metadata.imu_to_sensor_transform)
 
+        # self._imu_intr_rot = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
+        self._imu_intr_rot = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+
         self._g_fn = GRAV * np.array([0, 0, -1])
 
         self._start_ts = -1
@@ -79,10 +85,25 @@ class LioEkf:
         self._last_scan_ts = -1
 
         self._nav_curr = NavState()
-        self._nav_prev = NavState()
+        
+        # total_imu: accel =  [-0.93531433  0.36841277  0.23654302]
+        # total_imu: avel  =  [ 1.26553045 -0.25072862 -2.18688865]
+        # self._nav_curr.bias_acc = np.array([-0.93531433, 0.36841277, 0.23654302])
+        # self._nav_curr.bias_gyr = np.array([ 1.26553045, -0.25072862, -2.18688865])
+
+        # self._nav_curr.bias_acc = np.array([0.93531433, -0.36841277, 0.23654302])
+        # self._nav_curr.bias_gyr = np.array([-1.26553045, 0.25072862, -2.18688865])
+
+        # self._nav_curr.bias_acc = np.array([ -0.93531433,  -0.36841277, -19.80242368])
+        # self._nav_curr.bias_gyr = np.array([1.26553045, 0.25072862, 2.18688865])
+        
+        self._nav_prev = deepcopy(self._nav_curr)
 
         self._imu_prev = IMU()
         self._imu_curr = IMU()
+
+        self._imu_total = IMU()
+        self._imu_total_cnt = 0
 
         self._initialized = False
 
@@ -143,12 +164,22 @@ class LioEkf:
 
         self._imu_prev = self._imu_curr
 
-        imu = IMU.from_packet(imu_packet, prev_ts=self._imu_prev.ts)
-        self._imu_curr = imu
+        imu = IMU.from_packet(imu_packet,
+                              prev_ts=self._imu_prev.ts,
+                              _intr_rot=self._imu_intr_rot)
+
+        self._imu_curr = imu        
 
         # compensate imu/gyr
         self._imu_curr.lacc -= self._nav_curr.bias_acc
         self._imu_curr.avel -= self._nav_curr.bias_gyr
+
+        # accumulate total
+        self._imu_total.lacc += self._imu_curr.lacc
+        self._imu_total.avel += self._imu_curr.avel
+        self._imu_total_cnt += 1
+
+
 
         if not self._initialized:
             self._initialized = True
@@ -252,7 +283,7 @@ class LioEkfScans(client.ScanSource):
                 packet = next(it)
             except StopIteration:
                 yield ls_write
-                return
+                break
 
             if isinstance(packet, client.LidarPacket):
                 if scan_idx >= self._start_scan:
@@ -288,6 +319,14 @@ class LioEkfScans(client.ScanSource):
               f"scan_idx = {scan_idx}, "
               f"scans_num = {len(self._lio_ekf._lg_scan)}")
 
+        print(
+            "total_imu: accel = ",
+            self._lio_ekf._imu_total.lacc / self._lio_ekf._imu_total_cnt +
+            self._lio_ekf._g_fn)
+        print("total_imu: avel  = ",
+              self._lio_ekf._imu_total.avel / self._lio_ekf._imu_total_cnt)
+        print(f"total_cnt = ", self._lio_ekf._imu_total_cnt)
+
 
         min_ts = self._lio_ekf._lg_t[0]
         print(f"imu_ts: {min_ts}")
@@ -319,8 +358,6 @@ class LioEkfScans(client.ScanSource):
         pos_z = [a[2] for a in self._lio_ekf._lg_pos]
 
         scan_t = [scan_begin_ts(ls) - min_ts for ls in self._lio_ekf._lg_scan]
-
-        print(f"scan_t = {scan_t}")
 
         # fig0, ax_main = plt.subplots(2, 1)
 
@@ -372,6 +409,15 @@ class LioEkfScans(client.ScanSource):
 
         for a in ax:
             a.plot(scan_t, np.zeros_like(scan_t), '8r')
+
+        ax = plt.figure().add_subplot()  # projection='3d'
+        plt.axis("equal")
+        ax.plot(pos_x, pos_y)  # , pos_z
+        ax.grid(True)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+
+        # ax.set_zlabel('Z')
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
