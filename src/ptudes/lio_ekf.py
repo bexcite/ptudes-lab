@@ -97,7 +97,9 @@ class LioEkf:
         # self._nav_curr.bias_acc = np.array([ -0.93531433,  -0.36841277, -19.80242368])
         # self._nav_curr.bias_gyr = np.array([1.26553045, 0.25072862, 2.18688865])
         
-        self._nav_prev = deepcopy(self._nav_curr)
+        # self._nav_prev = deepcopy(self._nav_curr)
+
+        self._reset_nav()
 
         self._imu_prev = IMU()
         self._imu_curr = IMU()
@@ -113,9 +115,18 @@ class LioEkf:
         self._lg_pos = []
         self._lg_vel = []
         self._lg_scan = []
+        self._lg_dsp = []
 
         print(f"init: nav_pre  = {self._nav_prev}")
         print(f"init: nav_curr = {self._nav_curr}")
+
+    def _reset_nav(self):
+        
+        self._nav_curr.pos = np.zeros(3)
+        self._nav_curr.vel = np.zeros(3)
+        self._nav_curr.att_h = np.eye(3)
+        self._nav_prev = deepcopy(self._nav_curr)
+        print("------ RESET --- NAV -----")
 
     def _insMech(self):
         print(f"nav_prev = {self._nav_prev}")
@@ -205,9 +216,8 @@ class LioEkf:
         # print(f"ts: {imu_ts}, local_ts: {local_ts:.6f}, "
         #       f"processImu: {self._imu_curr = }")
 
-        print(f"processImu: acc={self._imu_curr.lacc}, gyr={self._imu_curr.avel}")
-
-        print(f"      prev: acc={self._imu_prev.lacc}, gyr={self._imu_prev.avel}")
+        # print(f"processImu: acc={self._imu_curr.lacc}, gyr={self._imu_curr.avel}")
+        # print(f"      prev: acc={self._imu_prev.lacc}, gyr={self._imu_prev.avel}")
 
         # if self._last_imup_ts < 0:
         #     self._last_imup_ts = local_ts
@@ -225,6 +235,9 @@ class LioEkf:
     def processLidarScan(self, ls: client.LidarScan) -> None:
         ls_ts = client.first_valid_column_ts(ls)
         self._lg_scan += [ls]
+
+        self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
+        self._reset_nav()
 
         local_ts = self._check_start_ts(ls_ts) / 10**9
         # print(f"ts: {ls_ts}, local_ts: {local_ts:.6f}, "
@@ -357,6 +370,19 @@ class LioEkfScans(client.ScanSource):
         pos_y = [a[1] for a in self._lio_ekf._lg_pos]
         pos_z = [a[2] for a in self._lio_ekf._lg_pos]
 
+        dpos_t = [dp[0] - min_ts for dp in self._lio_ekf._lg_dsp]
+        
+        dpos = []
+        for dp in self._lio_ekf._lg_dsp:
+            if dpos:
+                dpos.append(dpos[-1] + dp[1])
+            else:
+                dpos.append(dp[1])
+        dpos_x = [p[0] for p in dpos]
+        dpos_y = [p[1] for p in dpos]
+        dpos_z = [p[2] for p in dpos]
+
+
         scan_t = [scan_begin_ts(ls) - min_ts for ls in self._lio_ekf._lg_scan]
 
         # fig0, ax_main = plt.subplots(2, 1)
@@ -412,7 +438,8 @@ class LioEkfScans(client.ScanSource):
 
         ax = plt.figure().add_subplot()  # projection='3d'
         plt.axis("equal")
-        ax.plot(pos_x, pos_y)  # , pos_z
+        # ax.plot(pos_x, pos_y)  # , pos_z
+        ax.plot(dpos_x, dpos_y)
         ax.grid(True)
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
