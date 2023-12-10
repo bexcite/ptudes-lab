@@ -10,6 +10,8 @@ import ouster.client as client
 
 from ouster.sdk.pose_util import exp_rot_vec
 
+import matplotlib.pyplot as plt
+
 from dataclasses import dataclass
 
 GRAV = 9.782940329221166
@@ -81,6 +83,12 @@ class LioEkf:
 
         self._initialized = False
 
+        self._lg_t = []
+        self._lg_acc = []
+        self._lg_gyr = []
+        self._lg_pos = []
+        self._lg_vel = []
+
         print(f"init: nav_pre  = {self._nav_prev}")
         print(f"init: nav_curr = {self._nav_curr}")
 
@@ -144,6 +152,13 @@ class LioEkf:
 
         self._insMech()
 
+        # logging
+        self._lg_t += [self._imu_curr.ts]
+        self._lg_acc += [self._imu_curr.lacc]
+        self._lg_gyr += [self._imu_curr.avel]
+        self._lg_pos += [self._nav_curr.pos]
+        self._lg_vel += [self._nav_curr.vel]
+
         self._nav_prev = deepcopy(self._nav_curr)
 
 
@@ -152,9 +167,9 @@ class LioEkf:
 
         # print(f"ts: {imu_ts}, local_ts: {local_ts:.6f}, "
         #       f"processImu: {self._imu_curr = }")
-        
+
         print(f"processImu: acc={self._imu_curr.lacc}, gyr={self._imu_curr.avel}")
-        
+
         print(f"      prev: acc={self._imu_prev.lacc}, gyr={self._imu_prev.avel}")
 
         # if self._last_imup_ts < 0:
@@ -239,8 +254,83 @@ class LioEkfScans(client.ScanSource):
                 self._lio_ekf.processImuPacket(packet)
                 imu_cnt += 1
 
-            if imu_cnt > 20:
-                exit(0)
+            if imu_cnt > 150:
+                break
+
+        # show graphs
+        print(f"lg_t = {self._lio_ekf._lg_t}")
+        print(f"lg_accel = {self._lio_ekf._lg_acc}")
+
+        # plt.cla()
+
+
+        t = [t - self._lio_ekf._lg_t[0] for t in self._lio_ekf._lg_t]
+        acc_x = [a[0] for a in self._lio_ekf._lg_acc]
+        acc_y = [a[1] for a in self._lio_ekf._lg_acc]
+        acc_z = [a[2] for a in self._lio_ekf._lg_acc]
+
+        gyr_x = [a[0] for a in self._lio_ekf._lg_gyr]
+        gyr_y = [a[1] for a in self._lio_ekf._lg_gyr]
+        gyr_z = [a[2] for a in self._lio_ekf._lg_gyr]
+
+        pos_x = [a[0] for a in self._lio_ekf._lg_pos]
+        pos_y = [a[1] for a in self._lio_ekf._lg_pos]
+        pos_z = [a[2] for a in self._lio_ekf._lg_pos]
+
+
+        # fig0, ax_main = plt.subplots(2, 1)
+
+
+        
+
+
+        # Create the plot
+        fig, ax = plt.subplots(3, 1, sharex=True, sharey=True)
+        for a in ax.flat:
+            a.grid(True)
+
+        
+        # ax = plt.figure().add_subplot()  # projection='3d'
+        # ax.plot(pos_x, pos_y)  # , pos_z
+        # ax.set_xlabel('X')
+        # ax.set_ylabel('Y')
+
+        # ax.set_zlabel('Z')
+        plt.gcf().canvas.mpl_connect(
+            'key_release_event',
+            lambda event: [exit(0) if event.key == 'escape' else None])
+
+        # ax[0].plot(t, acc_x)
+        # ax[0].set_ylabel('acc_X')
+        # ax[1].plot(t, acc_y)
+        # ax[1].set_ylabel('acc_Y')
+        # ax[2].plot(t, acc_z)
+        # ax[2].set_ylabel('acc_Z')
+        # ax[2].set_xlabel('t')
+
+        # plt.plot(t, acc_x, "r", label="acc_x")
+        # plt.grid(True)
+        # plt.show()
+
+        # input()
+
+
+        # Create the plot
+        # for a in ax.flat:
+        #     a.cla()
+
+        ax[0].plot(t, gyr_x)
+        ax[0].set_ylabel('gyr_X')
+        ax[1].plot(t, gyr_y)
+        ax[1].set_ylabel('gyr_Y')
+        ax[2].plot(t, gyr_z)
+        ax[2].set_ylabel('gyr_Z')
+        ax[2].set_xlabel('t')
+
+        # plt.plot(t, acc_x, "r", label="acc_x")
+        # plt.grid(True)
+        plt.show()
+
 
 
     def close(self) -> None:
