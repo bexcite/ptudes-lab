@@ -16,6 +16,9 @@ from dataclasses import dataclass
 
 GRAV = 9.782940329221166
 
+def scan_begin_ts(ls: client.LidarScan) -> float:
+    return client.first_valid_column_ts(ls) / 10**9
+
 @dataclass
 class NavState:
     pos: np.ndarray = np.zeros(3)    # Vec3
@@ -88,6 +91,7 @@ class LioEkf:
         self._lg_gyr = []
         self._lg_pos = []
         self._lg_vel = []
+        self._lg_scan = []
 
         print(f"init: nav_pre  = {self._nav_prev}")
         print(f"init: nav_curr = {self._nav_curr}")
@@ -159,6 +163,8 @@ class LioEkf:
         self._lg_pos += [self._nav_curr.pos]
         self._lg_vel += [self._nav_curr.vel]
 
+
+
         self._nav_prev = deepcopy(self._nav_curr)
 
 
@@ -187,6 +193,8 @@ class LioEkf:
 
     def processLidarScan(self, ls: client.LidarScan) -> None:
         ls_ts = client.first_valid_column_ts(ls)
+        self._lg_scan += [ls]
+
         local_ts = self._check_start_ts(ls_ts) / 10**9
         # print(f"ts: {ls_ts}, local_ts: {local_ts:.6f}, "
         #       f"processScan: {ls = }")
@@ -207,8 +215,13 @@ class LioEkfScans(client.ScanSource):
 
     def __init__(self, source: client.PacketSource,
                  *,
-                 fields: Optional[FieldTypes] = None) -> None:
+                 fields: Optional[FieldTypes] = None,
+                 _start_scan: Optional[int] = None,
+                 _end_scan: Optional[int] = None) -> None:
         self._source = source
+
+        self._start_scan = _start_scan or 0
+        self._end_scan = _end_scan
 
         self._fields: Union[FieldTypes, UDPProfileLidar]
         self._fields = (fields if fields is not None else
@@ -230,7 +243,9 @@ class LioEkfScans(client.ScanSource):
 
         it = iter(self._source)
 
-        imu_cnt = 0
+        imu_idx = 0
+
+        scan_idx = 0
 
         while True:
             try:
@@ -240,31 +255,57 @@ class LioEkfScans(client.ScanSource):
                 return
 
             if isinstance(packet, client.LidarPacket):
-                self._lio_ekf.processLidarPacket(packet)
+                if scan_idx >= self._start_scan:
+                    self._lio_ekf.processLidarPacket(packet)
 
                 ls_write = ls_write or LidarScan(h, w, self._fields, columns_per_packet)
 
                 if batch(packet, ls_write):
                     # new scan finished
-                    self._lio_ekf.processLidarScan(ls_write)
+                    if scan_idx >= self._start_scan:
+                        self._lio_ekf.processLidarScan(ls_write)
+
                     yield ls_write
+
+                    if (self._end_scan is not None
+                            and scan_idx >= self._end_scan):
+                        break
+
+                    scan_idx += 1
+
                     ls_write = None
 
             elif isinstance(packet, client.ImuPacket):
-                self._lio_ekf.processImuPacket(packet)
-                imu_cnt += 1
+                if self._start_scan == 0 or scan_idx >= self._start_scan - 1:
+                    self._lio_ekf.processImuPacket(packet)
 
-            if imu_cnt > 150:
-                break
+                imu_idx += 1
+
+            # if imu_cnt > 150:
+            #     break
+
+        print(f"Finished: imu_idx = {imu_idx}, "
+              f"scan_idx = {scan_idx}, "
+              f"scans_num = {len(self._lio_ekf._lg_scan)}")
+
+
+        min_ts = self._lio_ekf._lg_t[0]
+        print(f"imu_ts: {min_ts}")
+        if self._lio_ekf._lg_scan:
+            scan_first_ts = scan_begin_ts(self._lio_ekf._lg_scan[0])
+            print(f"scan_ts: {scan_first_ts}")
+            min_ts = min(min_ts, scan_first_ts)
+        print(f"min_ts res: {min_ts}")
+
 
         # show graphs
-        print(f"lg_t = {self._lio_ekf._lg_t}")
-        print(f"lg_accel = {self._lio_ekf._lg_acc}")
+        # print(f"lg_t = {self._lio_ekf._lg_t}")
+        # print(f"lg_accel = {self._lio_ekf._lg_acc}")
 
         # plt.cla()
 
 
-        t = [t - self._lio_ekf._lg_t[0] for t in self._lio_ekf._lg_t]
+        t = [t - min_ts for t in self._lio_ekf._lg_t]
         acc_x = [a[0] for a in self._lio_ekf._lg_acc]
         acc_y = [a[1] for a in self._lio_ekf._lg_acc]
         acc_z = [a[2] for a in self._lio_ekf._lg_acc]
@@ -277,19 +318,19 @@ class LioEkfScans(client.ScanSource):
         pos_y = [a[1] for a in self._lio_ekf._lg_pos]
         pos_z = [a[2] for a in self._lio_ekf._lg_pos]
 
+        scan_t = [scan_begin_ts(ls) - min_ts for ls in self._lio_ekf._lg_scan]
+
+        print(f"scan_t = {scan_t}")
 
         # fig0, ax_main = plt.subplots(2, 1)
 
 
-        
-
-
         # Create the plot
-        fig, ax = plt.subplots(3, 1, sharex=True, sharey=True)
+        fig, ax = plt.subplots(6, 1, sharex=True, sharey=True)
         for a in ax.flat:
             a.grid(True)
 
-        
+
         # ax = plt.figure().add_subplot()  # projection='3d'
         # ax.plot(pos_x, pos_y)  # , pos_z
         # ax.set_xlabel('X')
@@ -300,13 +341,14 @@ class LioEkfScans(client.ScanSource):
             'key_release_event',
             lambda event: [exit(0) if event.key == 'escape' else None])
 
-        # ax[0].plot(t, acc_x)
-        # ax[0].set_ylabel('acc_X')
-        # ax[1].plot(t, acc_y)
-        # ax[1].set_ylabel('acc_Y')
-        # ax[2].plot(t, acc_z)
-        # ax[2].set_ylabel('acc_Z')
-        # ax[2].set_xlabel('t')
+        i = 0
+        ax[i].plot(t, acc_x)
+        ax[i].set_ylabel('acc_X')
+        ax[i + 1].plot(t, acc_y)
+        ax[i + 1].set_ylabel('acc_Y')
+        ax[i + 2].plot(t, acc_z)
+        ax[i + 2].set_ylabel('acc_Z')
+        # ax[i + 2].set_xlabel('t')
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
@@ -319,13 +361,17 @@ class LioEkfScans(client.ScanSource):
         # for a in ax.flat:
         #     a.cla()
 
-        ax[0].plot(t, gyr_x)
-        ax[0].set_ylabel('gyr_X')
-        ax[1].plot(t, gyr_y)
-        ax[1].set_ylabel('gyr_Y')
-        ax[2].plot(t, gyr_z)
-        ax[2].set_ylabel('gyr_Z')
-        ax[2].set_xlabel('t')
+        i = 3
+        ax[i].plot(t, gyr_x)
+        ax[i].set_ylabel('gyr_X')
+        ax[i + 1].plot(t, gyr_y)
+        ax[i + 1].set_ylabel('gyr_Y')
+        ax[i + 2].plot(t, gyr_z)
+        ax[i + 2].set_ylabel('gyr_Z')
+        ax[i + 2].set_xlabel('t')
+
+        for a in ax:
+            a.plot(scan_t, np.zeros_like(scan_t), '8r')
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
