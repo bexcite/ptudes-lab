@@ -10,6 +10,12 @@ import ouster.client as client
 
 from ouster.sdk.pose_util import exp_rot_vec
 
+from kiss_icp.config import KISSConfig
+from kiss_icp.config import load_config
+from kiss_icp.pybind import kiss_icp_pybind
+from kiss_icp.voxelization import voxel_down_sample
+from kiss_icp.kiss_icp import KissICP
+
 import matplotlib.pyplot as plt
 
 from dataclasses import dataclass
@@ -30,6 +36,12 @@ class NavState:
     bias_acc: np.ndarray = np.zeros(3) # Vec3
 
     # gravity vector?
+
+    def pose_mat(self) -> np.ndarray:
+        pose = np.eye(4)
+        pose[:3, :3] = self.att_h
+        pose[:3, 3] = self.pos
+        return pose
 
 
 @dataclass
@@ -93,6 +105,9 @@ class LioEkf:
 
     def __init__(self, metadata: SensorInfo):
         self._metadata = metadata
+
+        self._metadata.extrinsic = self._metadata.imu_to_sensor_transform
+        self._xyz_lut = client.XYZLut(self._metadata, use_extrinsics=True)
 
         self._sensor_to_imu = np.linalg.inv(
             self._metadata.imu_to_sensor_transform)
@@ -169,6 +184,14 @@ class LioEkf:
 
         self._imu_prev = IMU()
         self._imu_curr = IMU()
+
+        kiss_icp_config = load_config(None, deskew=True, max_range = 100)
+        self._kiss_icp = KissICP(config=kiss_icp_config)
+        # print("kiss_icp = ", kiss_icp_config)
+        # exit(0)
+
+        self._navs = []  # nav states (full, after the update on scan)
+        self._navs_t = []
 
         self._imu_total = IMU()
         self._imu_total_cnt = 0
@@ -341,17 +364,59 @@ class LioEkf:
         #       f"processLidar: {lidar_packet = }")
 
     def processLidarScan(self, ls: client.LidarScan) -> None:
-        ls_ts = client.first_valid_column_ts(ls)
-        self._lg_scan += [ls]
+        ls_ts = scan_begin_ts(ls)
 
+        # get XYZ points
+        timestamps = np.tile(np.linspace(0, 1.0, ls.w, endpoint=False), (ls.h, 1))
+        # filtering our zero returns makes it substantially faster for kiss-icp
+        sel_flag = ls.field(ChanField.RANGE) != 0
+        xyz = self._xyz_lut(ls)[sel_flag]
+        timestamps = timestamps[sel_flag]
+        print("ls.size = ", xyz.shape)
+        print("timestamps.size = ", timestamps.shape)
+
+        # deskew
+        frame = self.deskew_scan(xyz, timestamps)
+
+        source, frame_downsample = self.voxelize(frame)
+        print("source.shape = ", source.shape)
+        print("frame_downsample.shape = ", frame_downsample.shape)
+
+
+        sigma = self.get_sigma_threshold()
+
+
+        self._lg_scan += [ls]
         self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
         self._reset_nav()
         self._reset_nav_err()
 
-        local_ts = self._check_start_ts(ls_ts) / 10**9
+        # local_ts = self._check_start_ts(ls_ts) / 10**9
         # print(f"ts: {ls_ts}, local_ts: {local_ts:.6f}, "
         #       f"processScan: {ls = }")
         # print(f"{ls.timestamp = }")
+
+    def deskew_scan(self, xyz: np.ndarray,
+                    timestamps: np.ndarray) -> np.ndarray:
+        if len(self._navs) < 2:
+            return xyz
+        deskew_frame = kiss_icp_pybind._deskew_scan(
+            frame=kiss_icp_pybind._Vector3dVector(xyz),
+            timestamps=timestamps,
+            start_pose=self._navs[-2].pose_mat(),
+            finish_pose=self._navs[-1].pose_mat(),
+        )
+        return np.asarray(deskew_frame)
+
+    def voxelize(self, orig_frame) -> np.ndarray:
+        frame_downsample = voxel_down_sample(
+            orig_frame, self._kiss_icp.config.mapping.voxel_size * 0.5)
+        source = voxel_down_sample(frame_downsample,
+                                   self._kiss_icp.config.mapping.voxel_size)
+        return source, frame_downsample
+
+    def get_sigma_threshold(self) -> float:
+        return 0.5
 
     def _check_start_ts(self, ts: int) -> int:
         if self._start_ts < 0:
