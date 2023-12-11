@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
 GRAV = 9.782940329221166
+DEG2RAD = np.pi / 180.0
 
 def scan_begin_ts(ls: client.LidarScan) -> float:
     return client.first_valid_column_ts(ls) / 10**9
@@ -25,8 +26,8 @@ class NavState:
     att_h: np.ndarray = np.eye(3)    # Mat3x3, SO(3)
     vel: np.ndarray = np.zeros(3)    # Vec3
 
-    bias_acc: np.ndarray = np.zeros(3) # Vec3
     bias_gyr: np.ndarray = np.zeros(3)  # Vec3
+    bias_acc: np.ndarray = np.zeros(3) # Vec3
 
     # gravity vector?
 
@@ -37,8 +38,8 @@ class NavErrState:
     datt_v: np.ndarray = np.zeros(3)  # Vec3, tangent-space
     dvel: np.ndarray = np.zeros(3)    # Vec3
 
-    dbias_acc: np.ndarray = np.zeros(3) # Vec3
     dbias_gyr: np.ndarray = np.zeros(3) # Vec3
+    dbias_acc: np.ndarray = np.zeros(3) # Vec3
 
 
 @dataclass
@@ -65,7 +66,30 @@ class IMU:
         return imu
 
 
+def set_blk(m: np.ndarray, row_id: int, col_id: int,
+            b: np.ndarray) -> np.ndarray:
+    br, bc = b.shape
+    m[row_id:row_id + br, col_id:col_id + bc] = b
+    return m
+
+def vee(vec: np.ndarray) -> np.ndarray:
+    w = np.zeros((3, 3))
+    w[0, 1] = -vec[2]
+    w[0, 2] = vec[1]
+    w[1, 0] = vec[2]
+    w[1, 2] = -vec[0]
+    w[2, 0] = -vec[1]
+    w[2, 1] = vec[0]
+    return w
+
 class LioEkf:
+
+    STATE_RANK = 15
+    POS_ID = 0
+    VEL_ID = 3
+    PHI_ID = 6
+    BG_ID = 9
+    BA_ID = 12
 
     def __init__(self, metadata: SensorInfo):
         self._metadata = metadata
@@ -78,6 +102,46 @@ class LioEkf:
 
         self._g_fn = GRAV * np.array([0, 0, -1])
 
+        self._initpos_std = np.diag([0.05, 0.05, 0.05])
+        self._initvel_std = np.diag([0.05, 0.05, 0.05])
+        self._initatt_std = DEG2RAD * np.diag([1.0, 1.0, 0.5])
+
+        self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
+        self._gyr_arw = 1 * DEG2RAD  #  rad/s
+        self._acc_bias = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
+        self._gyr_bias = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
+        self._imu_corr_time = 3600  # s
+
+        # covariance for error-state Kalman filter
+        self._cov = np.zeros((self.STATE_RANK, self.STATE_RANK))
+        set_blk(self._cov, self.POS_ID, self.POS_ID,
+                np.square(self._initpos_std))
+        set_blk(self._cov, self.VEL_ID, self.VEL_ID,
+                np.square(self._initvel_std))
+        set_blk(self._cov, self.PHI_ID, self.PHI_ID,
+                np.square(self._initatt_std))
+        set_blk(self._cov, self.BG_ID, self.BG_ID,
+                np.square(self._gyr_bias * np.eye(3)))
+        set_blk(self._cov, self.BA_ID, self.BA_ID,
+                np.square(self._acc_bias * np.eye(3)))
+
+        self._cov_imu_bnoise = np.zeros((self.STATE_RANK, self.STATE_RANK))
+        corr_coef = 2 / self._imu_corr_time
+        set_blk(self._cov_imu_bnoise, 0, 0,
+                corr_coef * np.square(self._gyr_bias * np.eye(3)))
+        set_blk(self._cov_imu_bnoise, self.BA_ID, self.BA_ID,
+                corr_coef * np.square(self._acc_bias * np.eye(3)))
+
+        self._cov_mnoise = np.zeros((6, 6))
+        set_blk(self._cov_mnoise, 0, 0, np.square(self._acc_vrw * np.eye(3)))
+        set_blk(self._cov_mnoise, 3, 3, np.square(self._gyr_arw * np.eye(3)))
+
+        # error-state (delta X)
+        self._nav_err = NavErrState()
+        self._reset_nav_err()
+
+        # print(f"_cov = \n", self._cov.diagonal())
+
         self._start_ts = -1
 
         # self._last_imup_ts = -1
@@ -85,7 +149,7 @@ class LioEkf:
         self._last_scan_ts = -1
 
         self._nav_curr = NavState()
-        
+
         # total_imu: accel =  [-0.93531433  0.36841277  0.23654302]
         # total_imu: avel  =  [ 1.26553045 -0.25072862 -2.18688865]
         # self._nav_curr.bias_acc = np.array([-0.93531433, 0.36841277, 0.23654302])
@@ -96,10 +160,12 @@ class LioEkf:
 
         # self._nav_curr.bias_acc = np.array([ -0.93531433,  -0.36841277, -19.80242368])
         # self._nav_curr.bias_gyr = np.array([1.26553045, 0.25072862, 2.18688865])
-        
+
         # self._nav_prev = deepcopy(self._nav_curr)
 
         self._reset_nav()
+
+
 
         self._imu_prev = IMU()
         self._imu_curr = IMU()
@@ -121,12 +187,19 @@ class LioEkf:
         print(f"init: nav_curr = {self._nav_curr}")
 
     def _reset_nav(self):
-        
         self._nav_curr.pos = np.zeros(3)
         self._nav_curr.vel = np.zeros(3)
         self._nav_curr.att_h = np.eye(3)
         self._nav_prev = deepcopy(self._nav_curr)
         print("------ RESET --- NAV -----")
+
+    def _reset_nav_err(self):
+        self._nav_err.dpos = np.zeros(3)
+        self._nav_err.dvel = np.zeros(3)
+        self._nav_err.datt_v = np.zeros(3)
+        self._nav_err.dbias_gyr = np.zeros(3)
+        self._nav_err.dbias_acc = np.zeros(3)
+        print("------ RESET --- NAV -- ERR-----")
 
     def _insMech(self):
         print(f"nav_prev = {self._nav_prev}")
@@ -167,8 +240,6 @@ class LioEkf:
         print(f"after rotation:\n {self._nav_curr.att_h}\n")
 
 
-
-
     def processImuPacket(self, imu_packet: client.ImuPacket) -> None:
         imu_ts = imu_packet.sys_ts
         local_ts = self._check_start_ts(imu_ts) / 10**9
@@ -179,7 +250,7 @@ class LioEkf:
                               prev_ts=self._imu_prev.ts,
                               _intr_rot=self._imu_intr_rot)
 
-        self._imu_curr = imu        
+        self._imu_curr = imu
 
         # compensate imu/gyr
         self._imu_curr.lacc -= self._nav_curr.bias_acc
@@ -197,6 +268,43 @@ class LioEkf:
             return
 
         self._insMech()
+
+        sk = self._imu_curr.dt
+
+        # update error-state (delta X)
+        # TODO: Use real R(k-1)!
+        dk = sk * np.cross(self._nav_prev.att_h @ self._imu_curr.lacc,
+                           self._nav_err.datt_v)
+        self._nav_err.dpos = self._nav_err.dpos + self._nav_err.dvel * sk
+
+        self._nav_err.dvel = (
+            self._nav_err.dvel + dk +
+            sk * self._nav_prev.att_h @ self._nav_err.dbias_acc)
+
+        self._nav_err.datt_v = (
+            self._nav_err.datt_v - sk *
+            (self._nav_prev.att_h @ self._nav_err.dbias_gyr))
+
+        print("nav_err = \n", self._nav_err)
+
+        Ak = np.eye(self.STATE_RANK)
+        set_blk(Ak, self.POS_ID, self.VEL_ID, sk * np.eye(3))
+        set_blk(Ak, self.VEL_ID, self.PHI_ID,
+                sk * vee(self._nav_prev.att_h @ self._imu_curr.avel))
+        set_blk(Ak, self.VEL_ID, self.BA_ID, sk * self._nav_prev.att_h)
+        set_blk(Ak, self.PHI_ID, self.BG_ID, - sk * self._nav_prev.att_h)
+
+        Bk = np.zeros((self.STATE_RANK, 6))
+        set_blk(Bk, self.VEL_ID, 0,
+                -sk * vee(self._nav_err.datt_v) @ self._nav_prev.att_h)
+
+        self._cov = (Ak @ self._cov @ Ak.transpose() +
+                     Bk @ self._cov_mnoise @ Bk.transpose() +
+                     self._cov_imu_bnoise)
+
+        np.set_printoptions(precision=3, linewidth=180)
+        print("UPDATED COV:::::::::::::::::::::\n", self._cov)
+
 
         # logging
         self._lg_t += [self._imu_curr.ts]
@@ -238,6 +346,7 @@ class LioEkf:
 
         self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
         self._reset_nav()
+        self._reset_nav_err()
 
         local_ts = self._check_start_ts(ls_ts) / 10**9
         # print(f"ts: {ls_ts}, local_ts: {local_ts:.6f}, "
@@ -371,7 +480,7 @@ class LioEkfScans(client.ScanSource):
         pos_z = [a[2] for a in self._lio_ekf._lg_pos]
 
         dpos_t = [dp[0] - min_ts for dp in self._lio_ekf._lg_dsp]
-        
+
         dpos = []
         for dp in self._lio_ekf._lg_dsp:
             if dpos:
