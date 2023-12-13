@@ -14,6 +14,7 @@ from kiss_icp.config import KISSConfig
 from kiss_icp.config import load_config
 from kiss_icp.pybind import kiss_icp_pybind
 from kiss_icp.voxelization import voxel_down_sample
+from kiss_icp.mapping import get_voxel_hash_map
 from kiss_icp.kiss_icp import KissICP
 
 import matplotlib.pyplot as plt
@@ -106,11 +107,11 @@ class LioEkf:
     def __init__(self, metadata: SensorInfo):
         self._metadata = metadata
 
-        self._metadata.extrinsic = self._metadata.imu_to_sensor_transform
-        self._xyz_lut = client.XYZLut(self._metadata, use_extrinsics=True)
-
         self._sensor_to_imu = np.linalg.inv(
             self._metadata.imu_to_sensor_transform)
+
+        self._metadata.extrinsic = self._sensor_to_imu
+        self._xyz_lut = client.XYZLut(self._metadata, use_extrinsics=True)
 
         # self._imu_intr_rot = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
         self._imu_intr_rot = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
@@ -123,9 +124,11 @@ class LioEkf:
 
         self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
         self._gyr_arw = 1 * DEG2RAD  #  rad/s
-        self._acc_bias = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
-        self._gyr_bias = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
+        self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
+        self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
         self._imu_corr_time = 3600  # s
+
+        self._scan_meas_std = 0.02  # 2 cm (OS-0 on 100% refl target)
 
         # covariance for error-state Kalman filter
         self._cov = np.zeros((self.STATE_RANK, self.STATE_RANK))
@@ -136,20 +139,24 @@ class LioEkf:
         set_blk(self._cov, self.PHI_ID, self.PHI_ID,
                 np.square(self._initatt_std))
         set_blk(self._cov, self.BG_ID, self.BG_ID,
-                np.square(self._gyr_bias * np.eye(3)))
+                np.square(self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov, self.BA_ID, self.BA_ID,
-                np.square(self._acc_bias * np.eye(3)))
+                np.square(self._acc_bias_std * np.eye(3)))
 
         self._cov_imu_bnoise = np.zeros((self.STATE_RANK, self.STATE_RANK))
         corr_coef = 2 / self._imu_corr_time
         set_blk(self._cov_imu_bnoise, 0, 0,
-                corr_coef * np.square(self._gyr_bias * np.eye(3)))
+                corr_coef * np.square(self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov_imu_bnoise, self.BA_ID, self.BA_ID,
-                corr_coef * np.square(self._acc_bias * np.eye(3)))
+                corr_coef * np.square(self._acc_bias_std * np.eye(3)))
 
         self._cov_mnoise = np.zeros((6, 6))
         set_blk(self._cov_mnoise, 0, 0, np.square(self._acc_vrw * np.eye(3)))
         set_blk(self._cov_mnoise, 3, 3, np.square(self._gyr_arw * np.eye(3)))
+
+        # point measurement covariance (Er)
+        self._cov_scan_meas = np.square(self._scan_meas_std * np.eye(3))
+        self._cov_scan_meas_inv = np.linalg.inv(self._cov_scan_meas)
 
         # error-state (delta X)
         self._nav_err = NavErrState()
@@ -187,6 +194,7 @@ class LioEkf:
 
         kiss_icp_config = load_config(None, deskew=True, max_range = 100)
         self._kiss_icp = KissICP(config=kiss_icp_config)
+        self._local_map = get_voxel_hash_map(self._kiss_icp.config)
         # print("kiss_icp = ", kiss_icp_config)
         # exit(0)
 
@@ -385,26 +393,109 @@ class LioEkf:
 
         sigma = self.get_sigma_threshold()
 
+        # update state
+
+        # move source to map frams using imu integration of meas between
+        # prev and current lidar scan
+        Rk = self._nav_curr.att_h
+        tk = self._nav_curr.pos
+        exp_datt = exp_rot_vec(self._nav_err.datt_v)
+        # if src.size:
+        print("tk = ", tk)
+        print("dtk = ", self._nav_err.dpos)
+        print("exp_datt = ", exp_datt)
+        
+
+        h_dx = np.matmul(
+            exp_rot_vec(self._nav_err.datt_v) @ Rk,
+            source.transpose()).transpose() + tk + self._nav_err.dpos
+        print("============================= hdx = ", h_dx.shape)
+        print("h_dx_10 = ", h_dx[:10], np.linalg.norm(h_dx[0]))
+
+        src, tgt = self._local_map.get_correspondences(source, 3 * sigma)
+        print("src = ", src.shape)
+        print("tgt = ", tgt.shape)
+        if src.size:
+            print("src_10 = ", src[:10], np.linalg.norm(src[0]))
+            print("tgt_10 = ", tgt[:10], np.linalg.norm(tgt[0]))
+        
+
+        resid = src - tgt
+
+        Ji = np.zeros((3, self.STATE_RANK))
+        sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
+        sum_res = np.zeros(self.STATE_RANK)
+        set_blk(Ji, 0, 0, np.eye(3))
+        for i in range(src.shape[0]):
+            set_blk(Ji, 0, self.PHI_ID, vee(1.0 * Rk @ src[i]))
+            sum_Ji += Ji.transpose() @ self._cov_scan_meas_inv @ Ji
+            sum_res += Ji.transpose() @ self._cov_scan_meas_inv @ resid[i]
+            # print("ooooo i = ", i)
+            # print("sum_res = \n", sum_res)
+
+
+        cov_inv = np.linalg.inv(self._cov)
+        H_plus_cov = np.linalg.inv(sum_Ji + cov_inv)
+        delta_x = H_plus_cov @ sum_res
+
+        print("delta_x = ", delta_x)
+
+        # apply correction
+        self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
+        self._nav_err.dvel += delta_x[self.VEL_ID:self.VEL_ID + 3]
+        self._nav_err.datt_v += delta_x[self.PHI_ID:self.PHI_ID + 3]
+        self._nav_err.dbias_gyr += delta_x[self.BG_ID:self.BG_ID + 3]
+        self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
+
+        self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
+
+        print("_nav_err FINAL = ", self._nav_err)
+
+        self._nav_curr.pos += self._nav_err.dpos
+        self._nav_curr.vel += self._nav_err.dvel
+        self._nav_curr.att_h = exp_rot_vec(self._nav_err.datt_v) @ self._nav_curr.att_h
+        self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
+        self._nav_curr.bias_acc += self._nav_err.dbias_acc
+
+        print("_nav_curr FINAL = ", self._nav_curr)
+        
+        self._reset_nav_err()
+
+        new_pose = self._nav_curr.pose_mat()
+
+        self._local_map.update(frame_downsample, new_pose)
+
+        if not self._navs:
+            self._reset_nav()
+
+        self._navs += [deepcopy(self._nav_curr)]
+        self._navs_t += [scan_begin_ts(ls)]
+
+        print("navs = \n", self._navs)
+        print("navs_t = \n", self._navs_t)
+
+        print("local_map.size = ", self._local_map.point_cloud().shape)
+
+        # input()
+
+        # exit(0)
+
+
 
         self._lg_scan += [ls]
         self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
-        self._reset_nav()
-        self._reset_nav_err()
-
-        # local_ts = self._check_start_ts(ls_ts) / 10**9
-        # print(f"ts: {ls_ts}, local_ts: {local_ts:.6f}, "
-        #       f"processScan: {ls = }")
-        # print(f"{ls.timestamp = }")
+        # self._reset_nav()
+        
 
     def deskew_scan(self, xyz: np.ndarray,
                     timestamps: np.ndarray) -> np.ndarray:
-        if len(self._navs) < 2:
+        if len(self._navs) < 1:
             return xyz
         deskew_frame = kiss_icp_pybind._deskew_scan(
             frame=kiss_icp_pybind._Vector3dVector(xyz),
             timestamps=timestamps,
-            start_pose=self._navs[-2].pose_mat(),
-            finish_pose=self._navs[-1].pose_mat(),
+            start_pose=self._navs[-1].pose_mat(),
+            finish_pose=self._nav_curr.pose_mat(),
         )
         return np.asarray(deskew_frame)
 
@@ -546,12 +637,13 @@ class LioEkfScans(client.ScanSource):
 
         dpos_t = [dp[0] - min_ts for dp in self._lio_ekf._lg_dsp]
 
-        dpos = []
-        for dp in self._lio_ekf._lg_dsp:
-            if dpos:
-                dpos.append(dpos[-1] + dp[1])
-            else:
-                dpos.append(dp[1])
+        # dpos = []
+        # for dp in self._lio_ekf._lg_dsp:
+        #     if dpos:
+        #         dpos.append(dpos[-1] + dp[1])
+        #     else:
+        #         dpos.append(dp[1])
+        dpos = [dp[1] for dp in self._lio_ekf._lg_dsp]
         dpos_x = [p[0] for p in dpos]
         dpos_y = [p[1] for p in dpos]
         dpos_z = [p[2] for p in dpos]
