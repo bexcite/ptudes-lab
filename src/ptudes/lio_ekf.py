@@ -8,13 +8,15 @@ from ouster.client import (SensorInfo, LidarScan, ChanField, FieldTypes,
 import ouster.client._client as _client
 import ouster.client as client
 
-from ouster.sdk.pose_util import exp_rot_vec
+from ouster.sdk.pose_util import exp_rot_vec, log_rot_mat, _no_scipy_log_rot_mat
 
 from kiss_icp.config import KISSConfig
 from kiss_icp.config import load_config
 from kiss_icp.pybind import kiss_icp_pybind
 from kiss_icp.voxelization import voxel_down_sample
 from kiss_icp.mapping import get_voxel_hash_map
+from kiss_icp.threshold import get_threshold_estimator
+from kiss_icp.registration import register_frame
 from kiss_icp.kiss_icp import KissICP
 
 import matplotlib.pyplot as plt
@@ -23,6 +25,8 @@ from dataclasses import dataclass
 
 GRAV = 9.782940329221166
 DEG2RAD = np.pi / 180.0
+
+from .imu_test import imu_raw
 
 def scan_begin_ts(ls: client.LidarScan) -> float:
     return client.first_valid_column_ts(ls) / 10**9
@@ -63,7 +67,7 @@ class IMU:
     dt: float = 0
 
     @staticmethod
-    def from_packet(imu_packet: client.ImuPacket, prev_ts: Optional[float] = None, _intr_rot: Optional[np.ndarray] = None) -> "IMU":
+    def from_packet(imu_packet: client.ImuPacket, dt: float = 0.01, _intr_rot: Optional[np.ndarray] = None) -> "IMU":
         imu = IMU()
         imu.ts = imu_packet.sys_ts / 10**9
         imu.lacc = GRAV * imu_packet.accel
@@ -71,10 +75,6 @@ class IMU:
         if _intr_rot is not None:
             imu.lacc = _intr_rot @ imu.lacc
             imu.avel = _intr_rot @ imu.avel
-        dt = 0.01
-        if prev_ts is not None:
-            if imu.ts - prev_ts < dt:
-                dt = imu.ts - prev_ts
         imu.dt = dt
         return imu
 
@@ -122,10 +122,16 @@ class LioEkf:
         self._initvel_std = np.diag([0.05, 0.05, 0.05])
         self._initatt_std = DEG2RAD * np.diag([1.0, 1.0, 0.5])
 
+        # super good
+        # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
+        # self._gyr_arw = 1 * DEG2RAD  #  rad/s
+        # self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
+        # self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
+
         self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
-        self._gyr_arw = 1 * DEG2RAD  #  rad/s
-        self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
-        self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
+        self._gyr_arw = 10 * DEG2RAD  #  rad/s
+        self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(H)
+        self._gyr_bias_std = 0.01 * DEG2RAD  # rad/s / sqrt(H)
         self._imu_corr_time = 3600  # s
 
         self._scan_meas_std = 0.02  # 2 cm (OS-0 on 100% refl target)
@@ -145,7 +151,7 @@ class LioEkf:
 
         self._cov_imu_bnoise = np.zeros((self.STATE_RANK, self.STATE_RANK))
         corr_coef = 2 / self._imu_corr_time
-        set_blk(self._cov_imu_bnoise, 0, 0,
+        set_blk(self._cov_imu_bnoise, self.BG_ID, self.BG_ID,
                 corr_coef * np.square(self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov_imu_bnoise, self.BA_ID, self.BA_ID,
                 corr_coef * np.square(self._acc_bias_std * np.eye(3)))
@@ -163,6 +169,9 @@ class LioEkf:
         self._reset_nav_err()
 
         # print(f"_cov = \n", self._cov.diagonal())
+
+        self._imu_idx = 0
+        self._scan_idx = 0
 
         self._start_ts = -1
 
@@ -195,7 +204,9 @@ class LioEkf:
         kiss_icp_config = load_config(None, deskew=True, max_range = 100)
         self._kiss_icp = KissICP(config=kiss_icp_config)
         self._local_map = get_voxel_hash_map(self._kiss_icp.config)
-        # print("kiss_icp = ", kiss_icp_config)
+        self._adaptive_threshold = get_threshold_estimator(self._kiss_icp.config)
+        print("kiss_icp = ", kiss_icp_config)
+        print("adaptive_threshold = ", self._adaptive_threshold)
         # exit(0)
 
         self._navs = []  # nav states (full, after the update on scan)
@@ -233,53 +244,79 @@ class LioEkf:
         print("------ RESET --- NAV -- ERR-----")
 
     def _insMech(self):
-        print(f"nav_prev = {self._nav_prev}")
-        print(f"nav_curr = {self._nav_curr}")
+        # print(f"nav_prev = {self._nav_prev}")
+        # print(f"nav_curr = {self._nav_curr}")
 
-        print(f"imu_prev = {self._imu_prev}")
-        print(f"imu_curr = {self._imu_curr}")
+        # print(f"imu_prev = {self._imu_prev}")
+        # print(f"imu_curr = {self._imu_curr}")
+
+        sk = self._imu_curr.dt
 
 
-        imucurr_vel = self._imu_curr.lacc * self._imu_curr.dt
-        imucurr_angle = self._imu_curr.avel * self._imu_curr.dt
-        imupre_vel = self._imu_prev.lacc * self._imu_prev.dt
-        imupre_angle = self._imu_prev.avel * self._imu_prev.dt
+        imucurr_vel = self._imu_curr.lacc * sk
+        imucurr_angle = self._imu_curr.avel * sk
+        imupre_vel = self._imu_prev.lacc * sk
+        imupre_angle = self._imu_prev.avel * sk
 
         p1 = np.cross(imucurr_angle, imucurr_vel) / 2   #  1/2 * (w(k) x a(k) * s(k)^2)
         p2 = np.cross(imupre_angle, imucurr_vel) / 12   #  1/12 * (w(k-1) x a(k)) * s(k)^2
-        p3 = np.cross(imupre_vel, imucurr_angle) / 12   #  1/12 * (a(k-1) x w(k)) * s(k)^2
+        p3 = np.cross(imucurr_angle, imupre_vel) / 12   #  1/12 * (a(k-1) x w(k)) * s(k)^2
 
-        delta_v_fb = imucurr_vel + p1 + p2 + p3
+        delta_v_fb = imucurr_vel + p1 + p2 - p3
 
         delta_v_fn = self._nav_prev.att_h @ delta_v_fb
 
         # gravity vel part
-        delta_vgrav = self._g_fn * self._imu_curr.dt
+        delta_vgrav = self._g_fn * sk
 
         print(f"delta_grav = {delta_vgrav}")
         print(f"delta_v_fn  = {delta_v_fn}")
 
         self._nav_curr.vel = self._nav_prev.vel + delta_vgrav + delta_v_fn
 
-        self._nav_curr.pos = self._nav_prev.pos + 0.5 * (self._nav_curr.vel + self._nav_prev.vel)
+        self._nav_curr.pos = self._nav_prev.pos + 0.5 * (self._nav_curr.vel +
+                                                         self._nav_prev.vel)
 
-        rot_vec_b = imucurr_angle + np.cross(imupre_angle, imucurr_angle)
+        rot_vec_b = imucurr_angle + np.cross(imupre_angle, imucurr_angle) / 12
         self._nav_curr.att_h = self._nav_prev.att_h @ exp_rot_vec(rot_vec_b)
 
-        print(f"after velocity: {self._nav_curr.vel = }")
-        print(f"after position: {self._nav_curr.pos = }")
-        print(f"after rotation:\n {self._nav_curr.att_h}\n")
+        # rvec = log_rot_mat(self._nav_curr.att_h)
+        # rvec2 = _no_scipy_log_rot_mat(self._nav_curr.att_h)
+        # print("rmat0 = \n", self._nav_curr.att_h)
+        # print("rmat1 = \n", exp_rot_vec(rvec))
+        # print("rvec0 = ", rvec)
+        # print("rvec1 = ", log_rot_mat(exp_rot_vec(rvec)))
+        # print("rvec2 = ", rvec2)
+        # if (n := np.linalg.norm(rvec) > np.pi):
+        #     rvec3 = (n - np.pi) / n * rvec
+        #     print("rvec3 = ", rvec3)
+
+
+
+
+        # print(f"after velocity: {self._nav_curr.vel = }")
+        # print(f"after position: {self._nav_curr.pos = }")
+        # print(f"after rotation:\n {self._nav_curr.att_h}\n")
 
 
     def processImuPacket(self, imu_packet: client.ImuPacket) -> None:
-        imu_ts = imu_packet.sys_ts
-        local_ts = self._check_start_ts(imu_ts) / 10**9
+        # imu_ts = imu_packet.sys_ts
+        # local_ts = self._check_start_ts(imu_ts) / 10**9
+
+        # self._imu_prev = self._imu_curr
+
+        imu = IMU.from_packet(imu_packet, _intr_rot=self._imu_intr_rot)
+        # imu.dt = imu.ts - self._imu_prev.ts
+        self.processImu(imu)
+
+
+    def processImu(self, imu: IMU) -> None:
 
         self._imu_prev = self._imu_curr
 
-        imu = IMU.from_packet(imu_packet,
-                              prev_ts=self._imu_prev.ts,
-                              _intr_rot=self._imu_intr_rot)
+        imu.dt = imu.ts - self._imu_prev.ts
+        print(f"IMU[{self._imu_idx}] = ", imu)
+        self._imu_idx += 1
 
         self._imu_curr = imu
 
@@ -292,8 +329,6 @@ class LioEkf:
         self._imu_total.avel += self._imu_curr.avel
         self._imu_total_cnt += 1
 
-
-
         if not self._initialized:
             self._initialized = True
             return
@@ -304,12 +339,12 @@ class LioEkf:
 
         # update error-state (delta X)
         # TODO: Use real R(k-1)!
-        dk = sk * np.cross(self._nav_prev.att_h @ self._imu_curr.lacc,
-                           self._nav_err.datt_v)
+        dk = np.cross(self._nav_prev.att_h @ self._imu_curr.lacc,
+                      self._nav_err.datt_v)
         self._nav_err.dpos = self._nav_err.dpos + self._nav_err.dvel * sk
 
         self._nav_err.dvel = (
-            self._nav_err.dvel + dk +
+            self._nav_err.dvel + sk * dk +
             sk * self._nav_prev.att_h @ self._nav_err.dbias_acc)
 
         self._nav_err.datt_v = (
@@ -321,9 +356,9 @@ class LioEkf:
         Ak = np.eye(self.STATE_RANK)
         set_blk(Ak, self.POS_ID, self.VEL_ID, sk * np.eye(3))
         set_blk(Ak, self.VEL_ID, self.PHI_ID,
-                sk * vee(self._nav_prev.att_h @ self._imu_curr.avel))
+                sk * vee(self._nav_prev.att_h @ self._imu_curr.lacc))
         set_blk(Ak, self.VEL_ID, self.BA_ID, sk * self._nav_prev.att_h)
-        set_blk(Ak, self.PHI_ID, self.BG_ID, - sk * self._nav_prev.att_h)
+        set_blk(Ak, self.PHI_ID, self.BG_ID, -1.0 * sk * self._nav_prev.att_h)
 
         Bk = np.zeros((self.STATE_RANK, 6))
         set_blk(Bk, self.VEL_ID, 0,
@@ -347,6 +382,14 @@ class LioEkf:
 
 
         self._nav_prev = deepcopy(self._nav_curr)
+
+
+
+        # test only when processLidarScan is disabled
+        if not self._navs:
+            self._reset_nav()
+        self._navs += [deepcopy(self._nav_curr)]
+        self._navs_t += [self._imu_curr.ts]
 
 
         # cov predict
@@ -404,7 +447,7 @@ class LioEkf:
         print("tk = ", tk)
         print("dtk = ", self._nav_err.dpos)
         print("exp_datt = ", exp_datt)
-        
+
 
         h_dx = np.matmul(
             exp_rot_vec(self._nav_err.datt_v) @ Rk,
@@ -418,7 +461,7 @@ class LioEkf:
         if src.size:
             print("src_10 = ", src[:10], np.linalg.norm(src[0]))
             print("tgt_10 = ", tgt[:10], np.linalg.norm(tgt[0]))
-        
+
 
         resid = src - tgt
 
@@ -449,7 +492,18 @@ class LioEkf:
 
         self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
 
-        print("_nav_err FINAL = ", self._nav_err)
+        print("_nav_err FINAL       = ", self._nav_err)
+
+        initial_guess = self._nav_curr.pose_mat()
+
+        new_icp_pose = register_frame(
+            points=source,
+            voxel_map=self._local_map,
+            initial_guess=initial_guess,
+            max_correspondance_distance=3 * sigma,
+            kernel=sigma / 3,
+        )
+        print("_nav_curr FINAL (ICP) = ", new_icp_pose)
 
         self._nav_curr.pos += self._nav_err.dpos
         self._nav_curr.vel += self._nav_err.dvel
@@ -457,11 +511,15 @@ class LioEkf:
         self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
         self._nav_curr.bias_acc += self._nav_err.dbias_acc
 
-        print("_nav_curr FINAL = ", self._nav_curr)
-        
-        self._reset_nav_err()
+        print("_nav_curr FINAL = ", self._nav_curr.pose_mat())
 
         new_pose = self._nav_curr.pose_mat()
+
+        self._adaptive_threshold.update_model_deviation(
+            np.linalg.inv(initial_guess) @ new_pose)
+
+        self._reset_nav_err()
+
 
         self._local_map.update(frame_downsample, new_pose)
 
@@ -471,8 +529,8 @@ class LioEkf:
         self._navs += [deepcopy(self._nav_curr)]
         self._navs_t += [scan_begin_ts(ls)]
 
-        print("navs = \n", self._navs)
-        print("navs_t = \n", self._navs_t)
+        print("navs = \n", self._navs[-3:])
+        print("navs_t = \n", self._navs_t[-3:])
 
         print("local_map.size = ", self._local_map.point_cloud().shape)
 
@@ -480,12 +538,14 @@ class LioEkf:
 
         # exit(0)
 
+        self._nav_prev = deepcopy(self._nav_curr)
+
 
 
         self._lg_scan += [ls]
         self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
         # self._reset_nav()
-        
+
 
     def deskew_scan(self, xyz: np.ndarray,
                     timestamps: np.ndarray) -> np.ndarray:
@@ -507,7 +567,18 @@ class LioEkf:
         return source, frame_downsample
 
     def get_sigma_threshold(self) -> float:
-        return 0.5
+        adaptive = (self._kiss_icp.config.adaptive_threshold.initial_threshold
+                    if not self.has_moved() else
+                    self._adaptive_threshold.get_threshold())
+        print("ADAOTIVE ==== ", adaptive)
+        return adaptive
+
+    def has_moved(self):
+        if len(self._navs) < 1:
+            return False
+        compute_motion = lambda T1, T2: np.linalg.norm((np.linalg.inv(T1) @ T2)[:3, -1])
+        motion = compute_motion(self._navs[0].pose_mat(), self._navs[-1].pose_mat())
+        return motion > 5 * self._kiss_icp.config.adaptive_threshold.min_motion_th
 
     def _check_start_ts(self, ts: int) -> int:
         if self._start_ts < 0:
@@ -586,6 +657,21 @@ class LioEkfScans(client.ScanSource):
 
             elif isinstance(packet, client.ImuPacket):
                 if self._start_scan == 0 or scan_idx >= self._start_scan - 1:
+
+                    # acc_x = 0.1 if imu_idx < 10 else 0
+                    # acc_y = 0.0 if imu_idx < 10 else 0.1
+
+                    # acc = [acc_x, acc_y, GRAV]
+                    # gyr = [0, 0, 5.0]
+                    # imu = IMU(acc, gyr, imu_idx * 0.01)
+
+                    # imu_r = imu_raw[imu_idx, :]
+                    # acc = imu_r[:3] * GRAV
+                    # gyr = imu_r[3:]
+                    # imu = IMU(acc, gyr, imu_idx * 0.001)
+                    
+                    # self._lio_ekf.processImu(imu)
+
                     self._lio_ekf.processImuPacket(packet)
 
                 imu_idx += 1
@@ -635,7 +721,7 @@ class LioEkfScans(client.ScanSource):
         pos_y = [a[1] for a in self._lio_ekf._lg_pos]
         pos_z = [a[2] for a in self._lio_ekf._lg_pos]
 
-        dpos_t = [dp[0] - min_ts for dp in self._lio_ekf._lg_dsp]
+        dpos_t = [nav_t - min_ts for nav_t in self._lio_ekf._navs_t]
 
         # dpos = []
         # for dp in self._lio_ekf._lg_dsp:
@@ -643,10 +729,14 @@ class LioEkfScans(client.ScanSource):
         #         dpos.append(dpos[-1] + dp[1])
         #     else:
         #         dpos.append(dp[1])
-        dpos = [dp[1] for dp in self._lio_ekf._lg_dsp]
+        dpos = [nav.pos for nav in self._lio_ekf._navs]
         dpos_x = [p[0] for p in dpos]
         dpos_y = [p[1] for p in dpos]
         dpos_z = [p[2] for p in dpos]
+
+        # print("dpos = \n", np.array(dpos))
+
+
 
 
         scan_t = [scan_begin_ts(ls) - min_ts for ls in self._lio_ekf._lg_scan]
@@ -709,13 +799,30 @@ class LioEkfScans(client.ScanSource):
         ax.grid(True)
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
-
         # ax.set_zlabel('Z')
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
         plt.show()
 
+        '''
+        import ouster.viz as viz
+        from ptudes.utils import (make_point_viz, spin)
+        point_viz = make_point_viz(f"Traj: poses = {len(self._lio_ekf._navs)}")
+
+        min_pos = np.zeros(3) if len(
+            self._lio_ekf._navs) < 123 else self._lio_ekf._navs[123].pos
+        print("min_pos = ", min_pos)
+        for idx, nav in enumerate(self._lio_ekf._navs):
+            print(f"{idx}: ", nav.pos, ", att_h = ", log_rot_mat(nav.att_h))
+            pose_mat = nav.pose_mat()
+            pose_mat[:3, 3] -= min_pos
+            viz.AxisWithLabel(point_viz, pose=pose_mat,
+                              length=0.01)  # label=f"{idx}"
+
+        point_viz.update()
+        point_viz.run()
+        '''
 
 
     def close(self) -> None:
