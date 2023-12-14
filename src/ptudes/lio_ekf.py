@@ -1,4 +1,4 @@
-from typing import Optional, Iterable, Union
+from typing import Optional, Iterable, Union, List
 
 import numpy as np
 from copy import deepcopy
@@ -31,6 +31,16 @@ from .imu_test import imu_raw
 def scan_begin_ts(ls: client.LidarScan) -> float:
     return client.first_valid_column_ts(ls) / 10**9
 
+def scan_end_ts(ls: client.LidarScan) -> float:
+    return client.last_valid_column_ts(ls) / 10**9
+
+def scan_mid_ts(ls: client.LidarScan) -> float:
+    # TODO: not very good for scans with missed packets
+    #       and/or not full cloumns windows setting
+    bts = scan_begin_ts(ls)
+    return bts + 0.5 * (scan_end_ts(ls) - bts)
+
+
 @dataclass
 class NavState:
     pos: np.ndarray = np.zeros(3)    # Vec3
@@ -39,6 +49,8 @@ class NavState:
 
     bias_gyr: np.ndarray = np.zeros(3)  # Vec3
     bias_acc: np.ndarray = np.zeros(3) # Vec3
+
+    scan_based: bool = False
 
     # gravity vector?
 
@@ -222,8 +234,12 @@ class LioEkf:
         self._lg_gyr = []
         self._lg_pos = []
         self._lg_vel = []
+        self._lg_biasa = []
+        self._lg_biasg = []
+
+
         self._lg_scan = []
-        self._lg_dsp = []
+        # self._lg_dsp = []
 
         print(f"init: nav_pre  = {self._nav_prev}")
         print(f"init: nav_curr = {self._nav_curr}")
@@ -376,10 +392,6 @@ class LioEkf:
         self._lg_t += [self._imu_curr.ts]
         self._lg_acc += [self._imu_curr.lacc]
         self._lg_gyr += [self._imu_curr.avel]
-        self._lg_pos += [self._nav_curr.pos]
-        self._lg_vel += [self._nav_curr.vel]
-
-
 
         self._nav_prev = deepcopy(self._nav_curr)
 
@@ -526,8 +538,10 @@ class LioEkf:
         if not self._navs:
             self._reset_nav()
 
-        self._navs += [deepcopy(self._nav_curr)]
-        self._navs_t += [scan_begin_ts(ls)]
+        store_nav = deepcopy(self._nav_curr)
+        store_nav.scan_based = True
+        self._navs += [store_nav]
+        self._navs_t += [self._imu_curr.ts]
 
         print("navs = \n", self._navs[-3:])
         print("navs_t = \n", self._navs_t[-3:])
@@ -543,7 +557,7 @@ class LioEkf:
 
 
         self._lg_scan += [ls]
-        self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
+        # self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
         # self._reset_nav()
 
 
@@ -627,6 +641,9 @@ class LioEkfScans(client.ScanSource):
 
         scan_idx = 0
 
+        print("start_scan = ", self._start_scan)
+        print("end_scan = ", self._end_scan)
+
         while True:
             try:
                 packet = next(it)
@@ -644,11 +661,13 @@ class LioEkfScans(client.ScanSource):
                     # new scan finished
                     if scan_idx >= self._start_scan:
                         self._lio_ekf.processLidarScan(ls_write)
+                        print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
 
                     yield ls_write
 
                     if (self._end_scan is not None
                             and scan_idx >= self._end_scan):
+                        print("BREAK on scan_idx = ", scan_idx)
                         break
 
                     scan_idx += 1
@@ -656,7 +675,7 @@ class LioEkfScans(client.ScanSource):
                     ls_write = None
 
             elif isinstance(packet, client.ImuPacket):
-                if self._start_scan == 0 or scan_idx >= self._start_scan - 1:
+                if self._start_scan == 0 or scan_idx >= self._start_scan:
 
                     # acc_x = 0.1 if imu_idx < 10 else 0
                     # acc_y = 0.0 if imu_idx < 10 else 0.1
@@ -669,10 +688,12 @@ class LioEkfScans(client.ScanSource):
                     # acc = imu_r[:3] * GRAV
                     # gyr = imu_r[3:]
                     # imu = IMU(acc, gyr, imu_idx * 0.001)
-                    
+
                     # self._lio_ekf.processImu(imu)
 
                     self._lio_ekf.processImuPacket(packet)
+
+                    print("NAV_CURR (Im) = ", self._lio_ekf._nav_curr)
 
                 imu_idx += 1
 
@@ -717,11 +738,15 @@ class LioEkfScans(client.ScanSource):
         gyr_y = [a[1] for a in self._lio_ekf._lg_gyr]
         gyr_z = [a[2] for a in self._lio_ekf._lg_gyr]
 
-        pos_x = [a[0] for a in self._lio_ekf._lg_pos]
-        pos_y = [a[1] for a in self._lio_ekf._lg_pos]
-        pos_z = [a[2] for a in self._lio_ekf._lg_pos]
+        ba_x = [nav.bias_acc[0] for nav in self._lio_ekf._navs]
+        ba_y = [nav.bias_acc[1] for nav in self._lio_ekf._navs]
+        ba_z = [nav.bias_acc[2] for nav in self._lio_ekf._navs]
 
-        dpos_t = [nav_t - min_ts for nav_t in self._lio_ekf._navs_t]
+        bg_x = [nav.bias_gyr[0] for nav in self._lio_ekf._navs]
+        bg_y = [nav.bias_gyr[1] for nav in self._lio_ekf._navs]
+        bg_z = [nav.bias_gyr[2] for nav in self._lio_ekf._navs]
+
+        nav_t = [nav_t - min_ts for nav_t in self._lio_ekf._navs_t]
 
         # dpos = []
         # for dp in self._lio_ekf._lg_dsp:
@@ -734,21 +759,32 @@ class LioEkfScans(client.ScanSource):
         dpos_y = [p[1] for p in dpos]
         dpos_z = [p[2] for p in dpos]
 
-        # print("dpos = \n", np.array(dpos))
-
-
-
-
         scan_t = [scan_begin_ts(ls) - min_ts for ls in self._lio_ekf._lg_scan]
 
         # fig0, ax_main = plt.subplots(2, 1)
 
-
         # Create the plot
-        fig, ax = plt.subplots(6, 1, sharex=True, sharey=True)
-        for a in ax.flat:
+        fig = plt.figure()
+        # fig, ax_all = plt.subplots(6, 2, sharex=True, sharey=True)
+        ax = [
+            plt.subplot(6, 2, 1),
+            plt.subplot(6, 2, 3),
+            plt.subplot(6, 2, 5),
+            plt.subplot(6, 2, 7),
+            plt.subplot(6, 2, 9),
+            plt.subplot(6, 2, 11)
+        ]
+        for a in ax[1:]:
+            a.sharex(ax[0])
+        for a in ax[1:3]:
+            a.sharey(ax[0])
+        for a in ax[4:]:
+            a.sharey(ax[3])
+        for a in ax[:-1]:
+            plt.setp(a.get_xticklines(), visible=False)
+            plt.setp(a.get_xticklabels(), visible=False)
+        for a in ax:
             a.grid(True)
-
 
         # ax = plt.figure().add_subplot()  # projection='3d'
         # ax.plot(pos_x, pos_y)  # , pos_z
@@ -762,10 +798,13 @@ class LioEkfScans(client.ScanSource):
 
         i = 0
         ax[i].plot(t, acc_x)
+        ax[i].plot(nav_t, ba_x)
         ax[i].set_ylabel('acc_X')
         ax[i + 1].plot(t, acc_y)
+        ax[i + 1].plot(nav_t, ba_y)
         ax[i + 1].set_ylabel('acc_Y')
         ax[i + 2].plot(t, acc_z)
+        ax[i + 2].plot(nav_t, ba_z)
         ax[i + 2].set_ylabel('acc_Z')
         # ax[i + 2].set_xlabel('t')
 
@@ -774,24 +813,42 @@ class LioEkfScans(client.ScanSource):
         # plt.show()
 
         # input()
-
-
         # Create the plot
         # for a in ax.flat:
         #     a.cla()
 
         i = 3
         ax[i].plot(t, gyr_x)
+        ax[i].plot(nav_t, bg_x)
         ax[i].set_ylabel('gyr_X')
         ax[i + 1].plot(t, gyr_y)
+        ax[i + 1].plot(nav_t, bg_y)
         ax[i + 1].set_ylabel('gyr_Y')
         ax[i + 2].plot(t, gyr_z)
+        ax[i + 2].plot(nav_t, bg_z)
         ax[i + 2].set_ylabel('gyr_Z')
         ax[i + 2].set_xlabel('t')
 
-        for a in ax:
+        # i = 6
+        axX = fig.add_subplot(6, 2, (2, 4))
+        axX.plot(nav_t, dpos_x)
+        axX.grid(True)
+        axY = fig.add_subplot(6, 2, (6, 8))
+        axY.plot(nav_t, dpos_y)
+        axY.grid(True)
+        axZ = fig.add_subplot(6, 2, (10, 12))
+        axZ.plot(nav_t, dpos_z)
+        axZ.grid(True)
+        axZ.set_xlabel('t')
+
+        for a in ax + [axX, axY, axZ]:
             a.plot(scan_t, np.zeros_like(scan_t), '8r')
 
+        # plt.autoscale(tight=True)
+
+        # plt.tight_layout()
+
+        '''
         ax = plt.figure().add_subplot()  # projection='3d'
         plt.axis("equal")
         # ax.plot(pos_x, pos_y)  # , pos_z
@@ -800,6 +857,7 @@ class LioEkfScans(client.ScanSource):
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
         # ax.set_zlabel('Z')
+        '''
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
@@ -810,19 +868,54 @@ class LioEkfScans(client.ScanSource):
         from ptudes.utils import (make_point_viz, spin)
         point_viz = make_point_viz(f"Traj: poses = {len(self._lio_ekf._navs)}")
 
-        min_pos = np.zeros(3) if len(
-            self._lio_ekf._navs) < 123 else self._lio_ekf._navs[123].pos
-        print("min_pos = ", min_pos)
+        def next_scan_based_nav(navs: List[NavState],
+                                start_idx: int = 0) -> int:
+            ln = len(navs)
+            start_idx = (start_idx + ln) % ln
+            curr_idx = start_idx
+            while not navs[curr_idx].scan_based:
+                curr_idx = (curr_idx + 1) % ln
+                if curr_idx == start_idx:
+                    break
+            return curr_idx
+
+
+        target_idx = 0
+
+        def handle_keys(ctx, key, mods) -> bool:
+            nonlocal target_idx
+            if key == 32:
+                target_idx = next_scan_based_nav(self._lio_ekf._navs,
+                                                 start_idx=target_idx + 1)
+                target_nav = self._lio_ekf._navs[target_idx]
+                print("TNAV: ", target_nav)
+                point_viz.camera.set_target(
+                    np.linalg.inv(target_nav.pose_mat()))
+                point_viz.update()
+            return True
+
+        point_viz.push_key_handler(handle_keys)
+
+        # min_pos = np.zeros(3) if len(
+        #     self._lio_ekf._navs) < 123 else self._lio_ekf._navs[123].pos
+        # print("min_pos = ", min_pos)
         for idx, nav in enumerate(self._lio_ekf._navs):
-            print(f"{idx}: ", nav.pos, ", att_h = ", log_rot_mat(nav.att_h))
+            # print(f"{idx}: ", nav.pos, ", att_h = ", log_rot_mat(nav.att_h))
             pose_mat = nav.pose_mat()
-            pose_mat[:3, 3] -= min_pos
+            # pose_mat[:3, 3] -= min_pos
+            axis_length = 0.5 if nav.scan_based else 0.1
+            axis_label = f"{idx}" if nav.scan_based else ""
             viz.AxisWithLabel(point_viz, pose=pose_mat,
-                              length=0.01)  # label=f"{idx}"
+                              length=axis_length,
+                              label=axis_label)
+
+        target_nav = self._lio_ekf._navs[target_idx]
+        point_viz.camera.set_target(np.linalg.inv(target_nav.pose_mat()))
 
         point_viz.update()
         point_viz.run()
         '''
+
 
 
     def close(self) -> None:
