@@ -1,4 +1,4 @@
-from typing import Optional, Iterable, Union, List
+from typing import Optional, Iterable, Union, List, Dict
 
 import numpy as np
 from copy import deepcopy
@@ -50,7 +50,16 @@ class NavState:
     bias_gyr: np.ndarray = np.zeros(3)  # Vec3
     bias_acc: np.ndarray = np.zeros(3) # Vec3
 
-    scan_based: bool = False
+    scan: Optional[LidarScan] = None
+
+    frame: Optional[np.ndarray] = None
+    frame_ds: Optional[np.ndarray] = None
+    source: Optional[np.ndarray] = None
+
+    src: Optional[np.ndarray] = None
+    tgt: Optional[np.ndarray] = None
+
+    local_map: Optional[np.ndarray] = None
 
     # gravity vector?
 
@@ -59,6 +68,19 @@ class NavState:
         pose[:3, :3] = self.att_h
         pose[:3, 3] = self.pos
         return pose
+
+    def _formatted_str(self) -> str:
+        sb = " (S)" if self.scan else ""
+        s = (f"NavState{sb}:\n"
+             f"  pos: {self.pos}\n"
+             f"  vel: {self.vel}\n"
+             f"  att_v: {log_rot_mat(self.att_h)}\n"
+             f"  ba: {self.bias_acc}\n"
+             f"  bg: {self.bias_gyr}\n")
+        return s
+
+    def __repr__(self) -> str:
+        return self._formatted_str()
 
 
 @dataclass
@@ -119,8 +141,9 @@ class LioEkf:
     def __init__(self, metadata: SensorInfo):
         self._metadata = metadata
 
-        self._sensor_to_imu = np.linalg.inv(
-            self._metadata.imu_to_sensor_transform)
+        imu_to_sensor = self._metadata.imu_to_sensor_transform.copy()
+        imu_to_sensor[:3, 3] /= 1000
+        self._sensor_to_imu = np.linalg.inv(imu_to_sensor)
 
         self._metadata.extrinsic = self._sensor_to_imu
         self._xyz_lut = client.XYZLut(self._metadata, use_extrinsics=True)
@@ -285,8 +308,8 @@ class LioEkf:
         # gravity vel part
         delta_vgrav = self._g_fn * sk
 
-        print(f"delta_grav = {delta_vgrav}")
-        print(f"delta_v_fn  = {delta_v_fn}")
+        # print(f"delta_grav = {delta_vgrav}")
+        # print(f"delta_v_fn  = {delta_v_fn}")
 
         self._nav_curr.vel = self._nav_prev.vel + delta_vgrav + delta_v_fn
 
@@ -367,7 +390,7 @@ class LioEkf:
             self._nav_err.datt_v - sk *
             (self._nav_prev.att_h @ self._nav_err.dbias_gyr))
 
-        print("nav_err = \n", self._nav_err)
+        # print("nav_err = \n", self._nav_err)
 
         Ak = np.eye(self.STATE_RANK)
         set_blk(Ak, self.POS_ID, self.VEL_ID, sk * np.eye(3))
@@ -385,7 +408,7 @@ class LioEkf:
                      self._cov_imu_bnoise)
 
         np.set_printoptions(precision=3, linewidth=180)
-        print("UPDATED COV:::::::::::::::::::::\n", self._cov)
+        # print("UPDATED COV:::::::::::::::::::::\n", self._cov)
 
 
         # logging
@@ -398,8 +421,8 @@ class LioEkf:
 
 
         # test only when processLidarScan is disabled
-        if not self._navs:
-            self._reset_nav()
+        # if not self._navs:
+        #     self._reset_nav()
         self._navs += [deepcopy(self._nav_curr)]
         self._navs_t += [self._imu_curr.ts]
 
@@ -539,7 +562,14 @@ class LioEkf:
             self._reset_nav()
 
         store_nav = deepcopy(self._nav_curr)
-        store_nav.scan_based = True
+        store_nav.scan = ls
+        store_nav.frame = frame
+        store_nav.frame_ds = frame_downsample
+        store_nav.source = source
+        store_nav.src = src
+        store_nav.tgt = tgt
+        store_nav.local_map = self._local_map.point_cloud()
+
         self._navs += [store_nav]
         self._navs_t += [self._imu_curr.ts]
 
@@ -554,8 +584,6 @@ class LioEkf:
 
         self._nav_prev = deepcopy(self._nav_curr)
 
-
-
         self._lg_scan += [ls]
         # self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
         # self._reset_nav()
@@ -565,10 +593,22 @@ class LioEkf:
                     timestamps: np.ndarray) -> np.ndarray:
         if len(self._navs) < 1:
             return xyz
+        last_scan_nav = -1
+        for idx, nav in enumerate(self._navs[::-1]):
+            if nav.scan is not None:
+                last_scan_nav = len(self._navs) - 1 - idx
+                break
+        if last_scan_nav < 0 and len(self._navs) > 8 and len(self._navs) < 15:
+            last_scan_nav = 0
+        
+        if last_scan_nav < 0:
+            return xyz
+        print("LAST_SCAN_NAV = ", last_scan_nav)
+
         deskew_frame = kiss_icp_pybind._deskew_scan(
             frame=kiss_icp_pybind._Vector3dVector(xyz),
             timestamps=timestamps,
-            start_pose=self._navs[-1].pose_mat(),
+            start_pose=self._navs[last_scan_nav].pose_mat(),
             finish_pose=self._nav_curr.pose_mat(),
         )
         return np.asarray(deskew_frame)
@@ -861,11 +901,12 @@ class LioEkfScans(client.ScanSource):
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
-        plt.show()
+        # plt.show()
 
-        '''
+        
         import ouster.viz as viz
         from ptudes.utils import (make_point_viz, spin)
+        from ptudes.viz_utils import PointCloud
         point_viz = make_point_viz(f"Traj: poses = {len(self._lio_ekf._navs)}")
 
         def next_scan_based_nav(navs: List[NavState],
@@ -873,14 +914,34 @@ class LioEkfScans(client.ScanSource):
             ln = len(navs)
             start_idx = (start_idx + ln) % ln
             curr_idx = start_idx
-            while not navs[curr_idx].scan_based:
+            while navs[curr_idx].scan is None:
                 curr_idx = (curr_idx + 1) % ln
                 if curr_idx == start_idx:
                     break
             return curr_idx
 
+        clouds: Dict[int, PointCloud] = dict()
 
-        target_idx = 0
+        def set_cloud_from_idx(idx: int):
+            nonlocal clouds
+            nav = self._lio_ekf._navs[idx]
+            if nav.scan is None:
+                return
+            if idx not in clouds:
+                clouds[idx] = PointCloud(point_viz)
+            clouds[idx].pose = nav.pose_mat()
+            clouds[idx].points = nav.src
+
+        def toggle_cloud_from_idx(idx: int):
+            nonlocal clouds
+            if idx not in clouds:
+                return
+            clouds[idx].toggle()
+
+
+        target_idx = next_scan_based_nav(self._lio_ekf._navs, start_idx=0)
+
+        set_cloud_from_idx(target_idx)
 
         def handle_keys(ctx, key, mods) -> bool:
             nonlocal target_idx
@@ -891,6 +952,10 @@ class LioEkfScans(client.ScanSource):
                 print("TNAV: ", target_nav)
                 point_viz.camera.set_target(
                     np.linalg.inv(target_nav.pose_mat()))
+                set_cloud_from_idx(target_idx)
+                point_viz.update()
+            elif key == ord('V'):
+                toggle_cloud_from_idx(target_idx)
                 point_viz.update()
             return True
 
@@ -903,18 +968,19 @@ class LioEkfScans(client.ScanSource):
             # print(f"{idx}: ", nav.pos, ", att_h = ", log_rot_mat(nav.att_h))
             pose_mat = nav.pose_mat()
             # pose_mat[:3, 3] -= min_pos
-            axis_length = 0.5 if nav.scan_based else 0.1
-            axis_label = f"{idx}" if nav.scan_based else ""
+            axis_length = 0.5 if nav.scan is not None else 0.1
+            axis_label = f"{idx}" if nav.scan is not None else ""
             viz.AxisWithLabel(point_viz, pose=pose_mat,
                               length=axis_length,
                               label=axis_label)
+
 
         target_nav = self._lio_ekf._navs[target_idx]
         point_viz.camera.set_target(np.linalg.inv(target_nav.pose_mat()))
 
         point_viz.update()
         point_viz.run()
-        '''
+        
 
 
 
