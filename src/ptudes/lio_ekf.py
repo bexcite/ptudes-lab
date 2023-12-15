@@ -154,8 +154,8 @@ class LioEkf:
         self._g_fn = GRAV * np.array([0, 0, -1])
 
         self._initpos_std = np.diag([0.05, 0.05, 0.05])
-        self._initvel_std = np.diag([0.05, 0.05, 0.05])
-        self._initatt_std = DEG2RAD * np.diag([1.0, 1.0, 0.5])
+        self._initvel_std = np.diag([5.05, 5.05, 1.05])
+        self._initatt_std = DEG2RAD * np.diag([5.0, 5.0, 10.5])
 
         # super good
         # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
@@ -180,9 +180,9 @@ class LioEkf:
         set_blk(self._cov, self.PHI_ID, self.PHI_ID,
                 np.square(self._initatt_std))
         set_blk(self._cov, self.BG_ID, self.BG_ID,
-                np.square(self._gyr_bias_std * np.eye(3)))
+                np.square(10*self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov, self.BA_ID, self.BA_ID,
-                np.square(self._acc_bias_std * np.eye(3)))
+                np.square(10*self._acc_bias_std * np.eye(3)))
 
         self._cov_imu_bnoise = np.zeros((self.STATE_RANK, self.STATE_RANK))
         corr_coef = 2 / self._imu_corr_time
@@ -477,86 +477,98 @@ class LioEkf:
         # prev and current lidar scan
         Rk = self._nav_curr.att_h
         tk = self._nav_curr.pos
-        exp_datt = exp_rot_vec(self._nav_err.datt_v)
+        # exp_datt = exp_rot_vec(self._nav_err.datt_v)
         # if src.size:
-        print("tk = ", tk)
-        print("dtk = ", self._nav_err.dpos)
-        print("exp_datt = ", exp_datt)
+        # print("tk = ", tk)
+        # print("dtk = ", self._nav_err.dpos)
+        # print("exp_datt = ", exp_datt)
 
 
         h_dx = np.matmul(
             exp_rot_vec(self._nav_err.datt_v) @ Rk,
             source.transpose()).transpose() + tk + self._nav_err.dpos
         print("============================= hdx = ", h_dx.shape)
-        print("h_dx_10 = ", h_dx[:10], np.linalg.norm(h_dx[0]))
+        # print("h_dx_10 = ", h_dx[:10], np.linalg.norm(h_dx[0]))
 
-        src, tgt = self._local_map.get_correspondences(source, 3 * sigma)
-        print("src = ", src.shape)
-        print("tgt = ", tgt.shape)
-        if src.size:
-            print("src_10 = ", src[:10], np.linalg.norm(src[0]))
-            print("tgt_10 = ", tgt[:10], np.linalg.norm(tgt[0]))
+        np.set_printoptions(precision=3, linewidth=180)
+        print("PREDICTION COV:::::::::::::::::::::\n", self._cov)
 
+        print("_local_map.size = ", self._local_map.point_cloud().shape)
+        print("_local_map_empty = ", self._local_map.empty())
 
-        resid = src - tgt
-
-        Ji = np.zeros((3, self.STATE_RANK))
-        sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
-        sum_res = np.zeros(self.STATE_RANK)
-        set_blk(Ji, 0, 0, np.eye(3))
-        for i in range(src.shape[0]):
-            set_blk(Ji, 0, self.PHI_ID, vee(1.0 * Rk @ src[i]))
-            sum_Ji += Ji.transpose() @ self._cov_scan_meas_inv @ Ji
-            sum_res += Ji.transpose() @ self._cov_scan_meas_inv @ resid[i]
-            # print("ooooo i = ", i)
-            # print("sum_res = \n", sum_res)
+        src = np.empty((0, 3))
+        tgt = np.empty((0, 3))
+        if not self._local_map.empty():
+            src, tgt = self._local_map.get_correspondences(h_dx, 3 * sigma)
+            print("src = ", src.shape)
+            print("tgt = ", tgt.shape)
+            if src.size:
+                print("src_10 = ", src[:10])
+                print("tgt_10 = ", tgt[:10])
+                print("resid_10 = ", np.linalg.norm(src - tgt, axis=1)[:10])
 
 
-        cov_inv = np.linalg.inv(self._cov)
-        H_plus_cov = np.linalg.inv(sum_Ji + cov_inv)
-        delta_x = H_plus_cov @ sum_res
+            resid = src - tgt
 
-        print("delta_x = ", delta_x)
-
-        # apply correction
-        self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
-        self._nav_err.dvel += delta_x[self.VEL_ID:self.VEL_ID + 3]
-        self._nav_err.datt_v += delta_x[self.PHI_ID:self.PHI_ID + 3]
-        self._nav_err.dbias_gyr += delta_x[self.BG_ID:self.BG_ID + 3]
-        self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
-
-        self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
-
-        print("_nav_err FINAL       = ", self._nav_err)
-
-        initial_guess = self._nav_curr.pose_mat()
-
-        new_icp_pose = register_frame(
-            points=source,
-            voxel_map=self._local_map,
-            initial_guess=initial_guess,
-            max_correspondance_distance=3 * sigma,
-            kernel=sigma / 3,
-        )
-        print("_nav_curr FINAL (ICP) = ", new_icp_pose)
-
-        self._nav_curr.pos += self._nav_err.dpos
-        self._nav_curr.vel += self._nav_err.dvel
-        self._nav_curr.att_h = exp_rot_vec(self._nav_err.datt_v) @ self._nav_curr.att_h
-        self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
-        self._nav_curr.bias_acc += self._nav_err.dbias_acc
-
-        print("_nav_curr FINAL = ", self._nav_curr.pose_mat())
-
-        new_pose = self._nav_curr.pose_mat()
-
-        self._adaptive_threshold.update_model_deviation(
-            np.linalg.inv(initial_guess) @ new_pose)
-
-        self._reset_nav_err()
+            Ji = np.zeros((3, self.STATE_RANK))
+            sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
+            sum_res = np.zeros(self.STATE_RANK)
+            set_blk(Ji, 0, 0, np.eye(3))
+            for i in range(src.shape[0]):
+                set_blk(Ji, 0, self.PHI_ID, vee(- 1.0 * Rk @ src[i]))
+                sum_Ji += Ji.transpose() @ self._cov_scan_meas_inv @ Ji
+                sum_res += Ji.transpose() @ self._cov_scan_meas_inv @ resid[i]
+                # print("ooooo i = ", i)
+                # print("sum_res = \n", sum_res)
 
 
-        self._local_map.update(frame_downsample, new_pose)
+            cov_inv = np.linalg.inv(self._cov)
+            H_plus_cov = np.linalg.inv(sum_Ji + cov_inv)
+            delta_x = H_plus_cov @ sum_res
+
+            print("delta_x = ", delta_x)
+
+            # apply correction
+            self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
+            self._nav_err.dvel += delta_x[self.VEL_ID:self.VEL_ID + 3]
+            self._nav_err.datt_v += delta_x[self.PHI_ID:self.PHI_ID + 3]
+            self._nav_err.dbias_gyr += delta_x[self.BG_ID:self.BG_ID + 3]
+            self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
+
+            self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
+
+            print("_nav_err FINAL       = ", self._nav_err)
+
+            initial_guess = self._nav_curr.pose_mat()
+
+            new_icp_pose = register_frame(
+                points=source,
+                voxel_map=self._local_map,
+                initial_guess=initial_guess,
+                max_correspondance_distance=3 * sigma,
+                kernel=sigma / 3,
+            )
+            print("_nav_curr FINAL (ICP) = ", new_icp_pose)
+
+            self._nav_curr.pos += self._nav_err.dpos
+            # self._nav_curr.pos = new_icp_pose[:3, 3]
+            self._nav_curr.vel += self._nav_err.dvel
+            self._nav_curr.att_h = exp_rot_vec(self._nav_err.datt_v) @ self._nav_curr.att_h
+            # self._nav_curr.att_h = new_icp_pose[:3, :3]
+            self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
+            self._nav_curr.bias_acc += self._nav_err.dbias_acc
+
+            print("_nav_curr FINAL = ", self._nav_curr.pose_mat())
+
+            new_pose = self._nav_curr.pose_mat()
+
+            self._adaptive_threshold.update_model_deviation(
+                np.linalg.inv(initial_guess) @ new_pose)
+
+            self._reset_nav_err()
+
+
+        self._local_map.update(frame_downsample, self._nav_curr.pose_mat())
 
         if not self._navs:
             self._reset_nav()
@@ -577,12 +589,15 @@ class LioEkf:
         print("navs_t = \n", self._navs_t[-3:])
 
         print("local_map.size = ", self._local_map.point_cloud().shape)
+        print("src.shape = ", src.shape)
 
         # input()
 
         # exit(0)
 
         self._nav_prev = deepcopy(self._nav_curr)
+
+        # input()
 
         self._lg_scan += [ls]
         # self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
@@ -901,9 +916,10 @@ class LioEkfScans(client.ScanSource):
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
-        # plt.show()
+        plt.show()
 
         
+        '''
         import ouster.viz as viz
         from ptudes.utils import (make_point_viz, spin)
         from ptudes.viz_utils import PointCloud
@@ -930,7 +946,8 @@ class LioEkfScans(client.ScanSource):
             if idx not in clouds:
                 clouds[idx] = PointCloud(point_viz)
             clouds[idx].pose = nav.pose_mat()
-            clouds[idx].points = nav.src
+            clouds[idx].points = nav.frame_ds
+            print("SET POINTS SIZE = ", clouds[idx].points.shape)
 
         def toggle_cloud_from_idx(idx: int):
             nonlocal clouds
@@ -980,7 +997,7 @@ class LioEkfScans(client.ScanSource):
 
         point_viz.update()
         point_viz.run()
-        
+        '''
 
 
 
