@@ -23,6 +23,10 @@ import matplotlib.pyplot as plt
 
 from dataclasses import dataclass
 
+RED_COLOR = np.array([1.0, 0.1, 0.1, 1.0])  # RGBA
+BLUE_COLOR = np.array([0.4, 0.4, 1.0, 1.0])  # RGBA
+YELLOW_COLOR = np.array([0.1, 1.0, 1.0, 1.0])  # RGBA
+
 GRAV = 9.782940329221166
 DEG2RAD = np.pi / 180.0
 
@@ -57,7 +61,11 @@ class NavState:
     source: Optional[np.ndarray] = None
 
     src: Optional[np.ndarray] = None
+    src_hl: Optional[np.ndarray] = None
+    src_source: Optional[np.ndarray] = None
+    src_source_hl: Optional[np.ndarray] = None
     tgt: Optional[np.ndarray] = None
+    tgt_hl: Optional[np.ndarray] = None
 
     local_map: Optional[np.ndarray] = None
 
@@ -75,8 +83,8 @@ class NavState:
              f"  pos: {self.pos}\n"
              f"  vel: {self.vel}\n"
              f"  att_v: {log_rot_mat(self.att_h)}\n"
-             f"  ba: {self.bias_acc}\n"
-             f"  bg: {self.bias_gyr}\n")
+             f"  bg: {self.bias_gyr}\n"
+             f"  ba: {self.bias_acc}\n")
         return s
 
     def __repr__(self) -> str:
@@ -91,6 +99,18 @@ class NavErrState:
 
     dbias_gyr: np.ndarray = np.zeros(3) # Vec3
     dbias_acc: np.ndarray = np.zeros(3) # Vec3
+
+    def _formatted_str(self) -> str:
+        s = (f"NavStateError:\n"
+             f"  dpos: {self.dpos}\n"
+             f"  dvel: {self.dvel}\n"
+             f"  datt_v: {self.datt_v}\n"
+             f"  dbias_gyr: {self.dbias_gyr}\n"
+             f"  dbias_acc: {self.dbias_acc}\n")
+        return s
+
+    def __repr__(self) -> str:
+        return self._formatted_str()
 
 
 @dataclass
@@ -139,6 +159,9 @@ class LioEkf:
     BA_ID = 12
 
     def __init__(self, metadata: SensorInfo):
+
+        np.set_printoptions(precision=3, linewidth=180)
+
         self._metadata = metadata
 
         imu_to_sensor = self._metadata.imu_to_sensor_transform.copy()
@@ -153,9 +176,9 @@ class LioEkf:
 
         self._g_fn = GRAV * np.array([0, 0, -1])
 
-        self._initpos_std = np.diag([0.05, 0.05, 0.05])
-        self._initvel_std = np.diag([5.05, 5.05, 1.05])
-        self._initatt_std = DEG2RAD * np.diag([5.0, 5.0, 10.5])
+        self._initpos_std = np.diag([1.05, 1.05, 1.05])
+        self._initvel_std = np.diag([5.05, 5.05, 5.05])
+        self._initatt_std = DEG2RAD * np.diag([45.0, 45.0, 45.5])
 
         # super good
         # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
@@ -180,9 +203,9 @@ class LioEkf:
         set_blk(self._cov, self.PHI_ID, self.PHI_ID,
                 np.square(self._initatt_std))
         set_blk(self._cov, self.BG_ID, self.BG_ID,
-                np.square(10*self._gyr_bias_std * np.eye(3)))
+                np.square(20* self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov, self.BA_ID, self.BA_ID,
-                np.square(10*self._acc_bias_std * np.eye(3)))
+                np.square(20* self._acc_bias_std * np.eye(3)))
 
         self._cov_imu_bnoise = np.zeros((self.STATE_RANK, self.STATE_RANK))
         corr_coef = 2 / self._imu_corr_time
@@ -407,7 +430,7 @@ class LioEkf:
                      Bk @ self._cov_mnoise @ Bk.transpose() +
                      self._cov_imu_bnoise)
 
-        np.set_printoptions(precision=3, linewidth=180)
+        # np.set_printoptions(precision=3, linewidth=180)
         # print("UPDATED COV:::::::::::::::::::::\n", self._cov)
 
 
@@ -470,7 +493,9 @@ class LioEkf:
 
 
         sigma = self.get_sigma_threshold()
-
+        sigma = 1.0
+        print("sigma = ", sigma)
+        kernel = sigma / 3
         # update state
 
         # move source to map frams using imu integration of meas between
@@ -479,56 +504,104 @@ class LioEkf:
         tk = self._nav_curr.pos
         # exp_datt = exp_rot_vec(self._nav_err.datt_v)
         # if src.size:
-        # print("tk = ", tk)
-        # print("dtk = ", self._nav_err.dpos)
+        print("tk = ", tk)
+        print("Rk = ", Rk)
+        print("dtk = ", self._nav_err.dpos)
         # print("exp_datt = ", exp_datt)
 
-
-        h_dx = np.matmul(
-            exp_rot_vec(self._nav_err.datt_v) @ Rk,
-            source.transpose()).transpose() + tk + self._nav_err.dpos
-        print("============================= hdx = ", h_dx.shape)
-        # print("h_dx_10 = ", h_dx[:10], np.linalg.norm(h_dx[0]))
-
-        np.set_printoptions(precision=3, linewidth=180)
-        print("PREDICTION COV:::::::::::::::::::::\n", self._cov)
-
-        print("_local_map.size = ", self._local_map.point_cloud().shape)
-        print("_local_map_empty = ", self._local_map.empty())
+        initial_guess = self._nav_curr.pose_mat()
 
         src = np.empty((0, 3))
+        src_hl = np.empty((0, 3))
+        src_source = np.empty((0, 3))
+        src_source_hl = np.empty((0, 3))
         tgt = np.empty((0, 3))
-        if not self._local_map.empty():
+        tgt_hl = np.empty((0, 3))
+
+        for it in range(1):
+            print(f"--- ITERATION[{it}] =====================:::::")
+
+            dR = exp_rot_vec(self._nav_err.datt_v)
+
+            h_dx = np.matmul(
+                dR @ Rk, source.transpose()).transpose() + tk + self._nav_err.dpos
+            # print("============================= hdx = ", h_dx.shape)
+            # print("source[10] = ", source[:10])
+            # print("h_dx[10] = ", h_dx[:10])
+
+            # np.set_printoptions(precision=3, linewidth=180)
+            # print("PREDICTION COV:::::::::::::::::::::\n", self._cov)
+
+            print("_local_map.size = ", self._local_map.point_cloud().shape)
+            print("_local_map_empty = ", self._local_map.empty())
+
+            if self._local_map.empty():
+                break
+
+
             src, tgt = self._local_map.get_correspondences(h_dx, 3 * sigma)
             print("src = ", src.shape)
             print("tgt = ", tgt.shape)
-            if src.size:
-                print("src_10 = ", src[:10])
-                print("tgt_10 = ", tgt[:10])
-                print("resid_10 = ", np.linalg.norm(src - tgt, axis=1)[:10])
 
+            # HACK: recover original coords
+            src_source = src - tk - self._nav_err.dpos
+            src_source = np.matmul(src_source, np.linalg.inv(dR @ Rk).transpose())
+
+            # if src.size:
+            #     print("src_10 = ", src[:10])
+            #     print("tgt_10 = ", tgt[:10])
+            #     print("src_source_10 = ", src_source[:10])
+            #     print("resid_10 = ", np.linalg.norm(src - tgt, axis=1)[:10])
 
             resid = src - tgt
 
+            # self._cov_scan_meas_inv = np.eye(3)
+            print("Ep_inv = ", self._cov_scan_meas_inv)
+
             Ji = np.zeros((3, self.STATE_RANK))
             sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
-            sum_res = np.zeros(self.STATE_RANK)
             set_blk(Ji, 0, 0, np.eye(3))
-            for i in range(src.shape[0]):
-                set_blk(Ji, 0, self.PHI_ID, vee(- 1.0 * Rk @ src[i]))
+            print("Ji init = \n", Ji)
+            sum_res = np.zeros(self.STATE_RANK)
+            rand_idx = np.random.randint(0, src.shape[0], 10) if src.shape[0] > 0 else []
+            # rand_idx = 2967
+            print("rand_idx = ", rand_idx)
+            # idxs = [rand_idx] if src.shape[0] > 0 else []
+            idxs = rand_idx
+            src_hl = src[idxs]
+            tgt_hl = tgt[idxs]
+            src_source_hl = src_source[idxs]
+            for i in idxs:
+                set_blk(Ji, 0, self.PHI_ID, vee(1.0 * Rk @ src_source[i]))
+                print(f"src_source[{i}] = \n", src_source[i])
+                print(f"Ji[{i}] = \n", Ji)
+                print(f"resid[{i}] =", resid[i])
+                # input()
+                # w = np.square(kernel) / np.square(kernel + np.linalg.norm(resid[i]))
+                # w_mat = w * np.eye(3)
                 sum_Ji += Ji.transpose() @ self._cov_scan_meas_inv @ Ji
                 sum_res += Ji.transpose() @ self._cov_scan_meas_inv @ resid[i]
                 # print("ooooo i = ", i)
                 # print("sum_res = \n", sum_res)
 
+            print("sum_Ji = \n", sum_Ji)
+            print("sum_res = \n", sum_res)
+            # print("sum_res.shape = ", sum_res.shape)
+
+            # delta_xx = np.linalg.lstsq(sum_Ji, sum_res, rcond=None)
+            # print("delta_xx = ", delta_xx)
 
             cov_inv = np.linalg.inv(self._cov)
+            print("cov_inv = \n", cov_inv)
             H_plus_cov = np.linalg.inv(sum_Ji + cov_inv)
+            print("H_plus_cov = \n", H_plus_cov)
+            # K_gain = H_plus_cov @ Ji.transpose() @ self._cov_scan_meas_inv
+            # print("K_gain = \n", K_gain)
             delta_x = H_plus_cov @ sum_res
 
             print("delta_x = ", delta_x)
 
-            # apply correction
+            # apply correction error-state
             self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
             self._nav_err.dvel += delta_x[self.VEL_ID:self.VEL_ID + 3]
             self._nav_err.datt_v += delta_x[self.PHI_ID:self.PHI_ID + 3]
@@ -537,41 +610,49 @@ class LioEkf:
 
             self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
 
-            print("_nav_err FINAL       = ", self._nav_err)
+            print(f"_nav_err FINAL [iter:{it}] = \n", self._nav_err)
 
-            initial_guess = self._nav_curr.pose_mat()
-
-            new_icp_pose = register_frame(
-                points=source,
-                voxel_map=self._local_map,
-                initial_guess=initial_guess,
-                max_correspondance_distance=3 * sigma,
-                kernel=sigma / 3,
-            )
-            print("_nav_curr FINAL (ICP) = ", new_icp_pose)
-
-            self._nav_curr.pos += self._nav_err.dpos
-            # self._nav_curr.pos = new_icp_pose[:3, 3]
-            self._nav_curr.vel += self._nav_err.dvel
-            self._nav_curr.att_h = exp_rot_vec(self._nav_err.datt_v) @ self._nav_curr.att_h
-            # self._nav_curr.att_h = new_icp_pose[:3, :3]
-            self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
-            self._nav_curr.bias_acc += self._nav_err.dbias_acc
-
-            print("_nav_curr FINAL = ", self._nav_curr.pose_mat())
-
-            new_pose = self._nav_curr.pose_mat()
-
-            self._adaptive_threshold.update_model_deviation(
-                np.linalg.inv(initial_guess) @ new_pose)
-
-            self._reset_nav_err()
+            # new_icp_pose = register_frame(
+            #     points=source,
+            #     voxel_map=self._local_map,
+            #     initial_guess=initial_guess,
+            #     max_correspondance_distance=3 * sigma,
+            #     kernel=sigma / 3,
+            # )
+            # print("_nav_curr FINAL (ICP) = ", new_icp_pose)
 
 
-        self._local_map.update(frame_downsample, self._nav_curr.pose_mat())
 
-        if not self._navs:
+        self._nav_curr.pos += self._nav_err.dpos
+        # self._nav_curr.pos = new_icp_pose[:3, 3]
+        self._nav_curr.vel += self._nav_err.dvel
+        self._nav_curr.att_h = exp_rot_vec(self._nav_err.datt_v) @ self._nav_curr.att_h
+        # self._nav_curr.att_h = new_icp_pose[:3, :3]
+        self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
+        self._nav_curr.bias_acc += self._nav_err.dbias_acc
+
+
+        print("_nav_curr (SCAN UDATED) = \n", self._nav_curr)
+        print("UPDATED COV:::::::::::::::::::::\n", self._cov)
+
+        new_pose = self._nav_curr.pose_mat()
+
+        self._adaptive_threshold.update_model_deviation(
+            np.linalg.inv(initial_guess) @ new_pose)
+
+        self._reset_nav_err()
+
+
+        # if not self._navs:
+        #     print("RRRRRRRRRRRRRRRRRRRREEEEEEEEEEEEERSSSSSSS")
+        #     self._reset_nav()
+
+        if self._local_map.empty():
+            # first scna processed
             self._reset_nav()
+            self._navs = []
+            self._navs_t = []
+
 
         store_nav = deepcopy(self._nav_curr)
         store_nav.scan = ls
@@ -579,23 +660,31 @@ class LioEkf:
         store_nav.frame_ds = frame_downsample
         store_nav.source = source
         store_nav.src = src
+        store_nav.src_hl = src_hl
+        store_nav.src_source = src_source
+        store_nav.src_source_hl = src_source_hl
         store_nav.tgt = tgt
+        store_nav.tgt_hl = tgt_hl
         store_nav.local_map = self._local_map.point_cloud()
+
+
+        self._local_map.update(frame_downsample, self._nav_curr.pose_mat())
+
 
         self._navs += [store_nav]
         self._navs_t += [self._imu_curr.ts]
 
-        print("navs = \n", self._navs[-3:])
-        print("navs_t = \n", self._navs_t[-3:])
+        # print("navs = \n", self._navs[-3:])
+        # print("navs_t = \n", self._navs_t[-3:])
 
         print("local_map.size = ", self._local_map.point_cloud().shape)
-        print("src.shape = ", src.shape)
-
-        # input()
+        # print("src.shape = ", src.shape)
 
         # exit(0)
 
         self._nav_prev = deepcopy(self._nav_curr)
+
+        # print("_nav_prev = \n", self._nav_prev)
 
         # input()
 
@@ -615,7 +704,7 @@ class LioEkf:
                 break
         if last_scan_nav < 0 and len(self._navs) > 8 and len(self._navs) < 15:
             last_scan_nav = 0
-        
+
         if last_scan_nav < 0:
             return xyz
         print("LAST_SCAN_NAV = ", last_scan_nav)
@@ -914,12 +1003,16 @@ class LioEkfScans(client.ScanSource):
         # ax.set_zlabel('Z')
         '''
 
+        mplot = False
+
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
-        plt.show()
+        if mplot:
+            plt.show()
+            return
 
-        
-        '''
+
+
         import ouster.viz as viz
         from ptudes.utils import (make_point_viz, spin)
         from ptudes.viz_utils import PointCloud
@@ -936,7 +1029,41 @@ class LioEkfScans(client.ScanSource):
                     break
             return curr_idx
 
-        clouds: Dict[int, PointCloud] = dict()
+        @dataclass
+        class CloudsStruct:
+            src_source: PointCloud
+            src_source_hl: PointCloud
+            src: PointCloud
+            tgt: PointCloud
+            src_hl: PointCloud
+            tgt_hl: PointCloud
+            local_map: PointCloud
+
+            def __init__(self, point_viz: viz.PointViz):
+                self.src_source = PointCloud(point_viz)
+                self.src_source_hl = PointCloud(point_viz,
+                                                point_color=YELLOW_COLOR,
+                                                point_size=5)
+                self.src = PointCloud(point_viz)
+                self.src_hl = PointCloud(point_viz,
+                                         point_color=RED_COLOR,
+                                         point_size=5)
+                self.tgt = PointCloud(point_viz)
+                self.tgt_hl = PointCloud(point_viz,
+                                         point_color=BLUE_COLOR,
+                                         point_size=5)
+                self.local_map = PointCloud(point_viz)
+
+            def toggle(self):
+                self.src_source.toggle()
+                self.src_source_hl.toggle()
+                self.src.toggle()
+                self.src_hl.toggle()
+                self.tgt.toggle()
+                self.tgt_hl.toggle()
+                self.local_map.toggle()
+
+        clouds: Dict[int, CloudsStruct] = dict()
 
         def set_cloud_from_idx(idx: int):
             nonlocal clouds
@@ -944,16 +1071,28 @@ class LioEkfScans(client.ScanSource):
             if nav.scan is None:
                 return
             if idx not in clouds:
-                clouds[idx] = PointCloud(point_viz)
-            clouds[idx].pose = nav.pose_mat()
-            clouds[idx].points = nav.frame_ds
-            print("SET POINTS SIZE = ", clouds[idx].points.shape)
+                clouds[idx] = CloudsStruct(point_viz)
+                clouds[idx].src_source.pose = nav.pose_mat()
+                clouds[idx].src_source.points = nav.src_source
+                clouds[idx].src_source_hl.pose = nav.pose_mat()
+                clouds[idx].src_source_hl.points = nav.src_source_hl
+                clouds[idx].src.points = nav.src
+                clouds[idx].src_hl.points = nav.src_hl
+                clouds[idx].tgt.points = nav.tgt
+                clouds[idx].tgt_hl.points = nav.tgt_hl
+                clouds[idx].local_map.points = nav.local_map
+            print("SET POINTS SIZE.src = ", clouds[idx].src.points.shape)
 
-        def toggle_cloud_from_idx(idx: int):
+        def toggle_cloud_from_idx(idx: int, atr: Optional[str] = None):
             nonlocal clouds
             if idx not in clouds:
                 return
-            clouds[idx].toggle()
+            if atr is None or not hasattr(clouds[idx], atr):
+                clouds[idx].toggle()
+            elif hasattr(clouds[idx], atr):
+                cloud = getattr(clouds[idx], atr)
+                print(f"toggle {atr}[{idx}], size = ", cloud.points.shape)
+                cloud.toggle()
 
 
         target_idx = next_scan_based_nav(self._lio_ekf._navs, start_idx=0)
@@ -973,6 +1112,21 @@ class LioEkfScans(client.ScanSource):
                 point_viz.update()
             elif key == ord('V'):
                 toggle_cloud_from_idx(target_idx)
+                point_viz.update()
+            elif key == ord('G'):
+                toggle_cloud_from_idx(target_idx, "src_source")
+                toggle_cloud_from_idx(target_idx, "src_source_hl")
+                point_viz.update()
+            elif key == ord('H'):
+                toggle_cloud_from_idx(target_idx, "src")
+                toggle_cloud_from_idx(target_idx, "src_hl")
+                point_viz.update()
+            elif key == ord('J'):
+                toggle_cloud_from_idx(target_idx, "tgt")
+                toggle_cloud_from_idx(target_idx, "tgt_hl")
+                point_viz.update()
+            elif key == ord('M'):
+                toggle_cloud_from_idx(target_idx, "local_map")
                 point_viz.update()
             return True
 
@@ -997,7 +1151,7 @@ class LioEkfScans(client.ScanSource):
 
         point_viz.update()
         point_viz.run()
-        '''
+
 
 
 

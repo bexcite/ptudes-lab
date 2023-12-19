@@ -17,12 +17,18 @@ class PointCloud:
                  pose: pu.PoseH = np.eye(4),
                  enabled: bool = True,
                  point_size: int = 1,
+                 point_color: Optional[np.ndarray] = None,
                  _init_size: int = INIT_POINT_CLOUD_SIZE):
         self._viz = point_viz
         self._pose = pose
 
         self._points = np.zeros((_init_size, 3), dtype=np.float32, order='F')
         self._keys = np.zeros(_init_size, dtype=np.float32)
+        self._mask = np.zeros((_init_size, 4), dtype=float)
+        if point_color is not None and point_color.size == 4:
+            self._mask_color = point_color
+        else:
+            self._mask_color = np.zeros(4)
 
         self._active_key = 0.7
         
@@ -88,6 +94,8 @@ class PointCloud:
         self._keys[:n] = self._active_key
         self._points[n:] = np.zeros([1, 3])
         self._keys[n:] = 0
+        self._mask[:n] = self._mask_color
+        self._mask[n:] = 0
         self._points_idx = n
         self.update()
 
@@ -96,3 +104,4 @@ class PointCloud:
         self._cloud.set_pose(self._pose)
         self._cloud.set_xyz(self._points)
         self._cloud.set_key(self._keys[np.newaxis, ...])
+        self._cloud.set_mask(self._mask)
