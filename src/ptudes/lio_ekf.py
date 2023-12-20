@@ -44,6 +44,8 @@ def scan_mid_ts(ls: client.LidarScan) -> float:
     bts = scan_begin_ts(ls)
     return bts + 0.5 * (scan_end_ts(ls) - bts)
 
+def centroid(points: np.ndarray) -> np.ndarray:
+    return np.sum(points, axis=0) / points.shape[0]
 
 @dataclass
 class NavState:
@@ -495,7 +497,7 @@ class LioEkf:
 
 
         sigma = self.get_sigma_threshold()
-        sigma = 0.1
+        sigma = 1.5
         print("sigma = ", sigma)
         kernel = sigma / 3
         # update state
@@ -519,6 +521,8 @@ class LioEkf:
         src_source_hl = np.empty((0, 3))
         tgt = np.empty((0, 3))
         tgt_hl = np.empty((0, 3))
+
+
 
         for it in range(1):
             print(f"--- ITERATION[{it}] =====================:::::")
@@ -586,12 +590,15 @@ class LioEkf:
 
             resid = src - tgt
 
+            print("centroid src = ", centroid(src))
+            print("centroid tgt = ", centroid(tgt))
+
             # self._cov_scan_meas_inv = np.eye(3)
             print("Ep_inv = ", self._cov_scan_meas_inv)
 
             Ji = np.zeros((3, self.STATE_RANK))
             sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
-            set_blk(Ji, 0, 0, np.eye(3))
+            set_blk(Ji, 0, 0, -1.0 * np.eye(3))
             print("Ji init = \n", Ji)
             sum_res = np.zeros(self.STATE_RANK)
             # rand_idx = np.random.randint(0, src.shape[0], 10) if src.shape[0] > 0 else []
@@ -599,6 +606,17 @@ class LioEkf:
             # print("rand_idx = ", rand_idx)
             # idxs = [rand_idx] if src.shape[0] > 0 else []
             idxs = list(range(src.shape[0]))
+            # print("resid_shape = ", resid.shape)
+            # resid_norms = np.linalg.norm(resid, axis=1)
+            # print("resid_norms_shape = ", resid_norms.shape)
+            # bigger_resid = np.nonzero((resid_norms > 1) & (resid_norms < 3)
+            #                           & (src_source[:, 2] > 0)
+            #                           & (src_source[:, 1] < -10))
+            # print("bigger_resids = ", bigger_resid)
+            # print("bigger_resids_size = ", bigger_resid[0].size)
+            # idxs = bigger_resid[0]
+            # input()
+
             src_hl = src[idxs]
             tgt_hl = tgt[idxs]
             src_source_hl = src_source[idxs]
@@ -608,7 +626,7 @@ class LioEkf:
                 # print(f"Ji[{i}] = \n", Ji)
                 # print(f"resid[{i}] =", resid[i])
                 # input()
-                w = np.square(kernel) / np.square(kernel + np.linalg.norm(resid[i]))
+                # w = np.square(kernel) / np.square(kernel + np.linalg.norm(resid[i]))
                 # print(f"w[{i}] = ", w)
                 # w_mat = w * np.eye(3)
                 sum_Ji += Ji.transpose() @ self._cov_scan_meas_inv @ Ji
