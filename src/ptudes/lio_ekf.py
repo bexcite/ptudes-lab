@@ -176,7 +176,7 @@ class LioEkf:
 
         self._g_fn = GRAV * np.array([0, 0, -1])
 
-        self._initpos_std = np.diag([1.05, 1.05, 1.05])
+        self._initpos_std = np.diag([10.05, 10.05, 10.05])
         self._initvel_std = np.diag([5.05, 5.05, 5.05])
         self._initatt_std = DEG2RAD * np.diag([45.0, 45.0, 45.5])
 
@@ -206,6 +206,8 @@ class LioEkf:
                 np.square(20* self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov, self.BA_ID, self.BA_ID,
                 np.square(20* self._acc_bias_std * np.eye(3)))
+
+        self._cov_init = np.copy(self._cov)
 
         self._cov_imu_bnoise = np.zeros((self.STATE_RANK, self.STATE_RANK))
         corr_coef = 2 / self._imu_corr_time
@@ -493,7 +495,7 @@ class LioEkf:
 
 
         sigma = self.get_sigma_threshold()
-        sigma = 1.0
+        sigma = 0.1
         print("sigma = ", sigma)
         kernel = sigma / 3
         # update state
@@ -521,7 +523,21 @@ class LioEkf:
         for it in range(1):
             print(f"--- ITERATION[{it}] =====================:::::")
 
+            if self._local_map.empty():
+                break
+
             dR = exp_rot_vec(self._nav_err.datt_v)
+
+            new_icp_pose = register_frame(
+                points=source,
+                voxel_map=self._local_map,
+                initial_guess=initial_guess,
+                max_correspondance_distance=3 * sigma,
+                kernel=sigma / 3,
+            )
+            h_dx_icp = np.matmul(
+                new_icp_pose[:3, :3],
+                source.transpose()).transpose() + new_icp_pose[:3, 3]
 
             h_dx = np.matmul(
                 dR @ Rk, source.transpose()).transpose() + tk + self._nav_err.dpos
@@ -535,17 +551,32 @@ class LioEkf:
             print("_local_map.size = ", self._local_map.point_cloud().shape)
             print("_local_map_empty = ", self._local_map.empty())
 
-            if self._local_map.empty():
-                break
-
-
             src, tgt = self._local_map.get_correspondences(h_dx, 3 * sigma)
             print("src = ", src.shape)
             print("tgt = ", tgt.shape)
 
+            src_icp, tgt_icp = self._local_map.get_correspondences(h_dx_icp, 3 * sigma)
+            print("src_icp = ", src_icp.shape)
+            print("tgt_icp = ", tgt_icp.shape)
+
             # HACK: recover original coords
             src_source = src - tk - self._nav_err.dpos
             src_source = np.matmul(src_source, np.linalg.inv(dR @ Rk).transpose())
+
+            # HACK: recover original coords
+            src_source_icp = src_icp - new_icp_pose[:3, 3]
+            src_source_icp = np.matmul(
+                src_source_icp,
+                np.linalg.inv(new_icp_pose[:3, :3]).transpose())
+
+
+            src = np.matmul(dR @ Rk, src_source_icp.transpose()).transpose(
+            ) + tk + self._nav_err.dpos
+
+
+            src_source = src_source_icp
+            tgt = tgt_icp
+
 
             # if src.size:
             #     print("src_10 = ", src[:10])
@@ -563,21 +594,22 @@ class LioEkf:
             set_blk(Ji, 0, 0, np.eye(3))
             print("Ji init = \n", Ji)
             sum_res = np.zeros(self.STATE_RANK)
-            rand_idx = np.random.randint(0, src.shape[0], 10) if src.shape[0] > 0 else []
+            # rand_idx = np.random.randint(0, src.shape[0], 10) if src.shape[0] > 0 else []
             # rand_idx = 2967
-            print("rand_idx = ", rand_idx)
+            # print("rand_idx = ", rand_idx)
             # idxs = [rand_idx] if src.shape[0] > 0 else []
-            idxs = rand_idx
+            idxs = list(range(src.shape[0]))
             src_hl = src[idxs]
             tgt_hl = tgt[idxs]
             src_source_hl = src_source[idxs]
             for i in idxs:
                 set_blk(Ji, 0, self.PHI_ID, vee(1.0 * Rk @ src_source[i]))
-                print(f"src_source[{i}] = \n", src_source[i])
-                print(f"Ji[{i}] = \n", Ji)
-                print(f"resid[{i}] =", resid[i])
+                # print(f"src_source[{i}] = \n", src_source[i])
+                # print(f"Ji[{i}] = \n", Ji)
+                # print(f"resid[{i}] =", resid[i])
                 # input()
-                # w = np.square(kernel) / np.square(kernel + np.linalg.norm(resid[i]))
+                w = np.square(kernel) / np.square(kernel + np.linalg.norm(resid[i]))
+                # print(f"w[{i}] = ", w)
                 # w_mat = w * np.eye(3)
                 sum_Ji += Ji.transpose() @ self._cov_scan_meas_inv @ Ji
                 sum_res += Ji.transpose() @ self._cov_scan_meas_inv @ resid[i]
@@ -590,6 +622,8 @@ class LioEkf:
 
             # delta_xx = np.linalg.lstsq(sum_Ji, sum_res, rcond=None)
             # print("delta_xx = ", delta_xx)
+
+            # self._cov = np.copy(self._cov_init)
 
             cov_inv = np.linalg.inv(self._cov)
             print("cov_inv = \n", cov_inv)
@@ -612,14 +646,11 @@ class LioEkf:
 
             print(f"_nav_err FINAL [iter:{it}] = \n", self._nav_err)
 
-            # new_icp_pose = register_frame(
-            #     points=source,
-            #     voxel_map=self._local_map,
-            #     initial_guess=initial_guess,
-            #     max_correspondance_distance=3 * sigma,
-            #     kernel=sigma / 3,
-            # )
-            # print("_nav_curr FINAL (ICP) = ", new_icp_pose)
+            print("_nav_curr FINAL (ICP) = ", new_icp_pose)
+
+            # self._nav_curr.pos = new_icp_pose[:3, 3]
+            # self._nav_curr.att_h = new_icp_pose[:3, :3]
+
 
 
 
