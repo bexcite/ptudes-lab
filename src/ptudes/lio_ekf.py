@@ -179,8 +179,8 @@ class LioEkf:
         self._g_fn = GRAV * np.array([0, 0, -1])
 
         self._initpos_std = np.diag([10.05, 10.05, 10.05])
-        self._initvel_std = np.diag([5.05, 5.05, 5.05])
-        self._initatt_std = DEG2RAD * np.diag([45.0, 45.0, 45.5])
+        self._initvel_std = np.diag([5.05, 5.05, 1.05])
+        self._initatt_std = DEG2RAD * np.diag([15.0, 15.0, 15.5])
 
         # super good
         # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
@@ -194,7 +194,7 @@ class LioEkf:
         self._gyr_bias_std = 0.01 * DEG2RAD  # rad/s / sqrt(H)
         self._imu_corr_time = 3600  # s
 
-        self._scan_meas_std = 0.02  # 2 cm (OS-0 on 100% refl target)
+        self._scan_meas_std = 0.04  # 2 cm (OS-0 on 100% refl target)
 
         # covariance for error-state Kalman filter
         self._cov = np.zeros((self.STATE_RANK, self.STATE_RANK))
@@ -205,18 +205,18 @@ class LioEkf:
         set_blk(self._cov, self.PHI_ID, self.PHI_ID,
                 np.square(self._initatt_std))
         set_blk(self._cov, self.BG_ID, self.BG_ID,
-                np.square(20* self._gyr_bias_std * np.eye(3)))
+                np.square(10* self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov, self.BA_ID, self.BA_ID,
-                np.square(20* self._acc_bias_std * np.eye(3)))
+                np.square(10* self._acc_bias_std * np.eye(3)))
 
         self._cov_init = np.copy(self._cov)
 
         self._cov_imu_bnoise = np.zeros((self.STATE_RANK, self.STATE_RANK))
         corr_coef = 2 / self._imu_corr_time
         set_blk(self._cov_imu_bnoise, self.BG_ID, self.BG_ID,
-                corr_coef * np.square(self._gyr_bias_std * np.eye(3)))
+                corr_coef * np.square(10* self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov_imu_bnoise, self.BA_ID, self.BA_ID,
-                corr_coef * np.square(self._acc_bias_std * np.eye(3)))
+                corr_coef * np.square(10* self._acc_bias_std * np.eye(3)))
 
         self._cov_mnoise = np.zeros((6, 6))
         set_blk(self._cov_mnoise, 0, 0, np.square(self._acc_vrw * np.eye(3)))
@@ -488,8 +488,13 @@ class LioEkf:
         print("ls.size = ", xyz.shape)
         print("timestamps.size = ", timestamps.shape)
 
+        # debug
+        kiss_deskew_and_guess = False
+
         # deskew
-        frame = self.deskew_scan(xyz, timestamps)
+        frame = self.deskew_scan(xyz,
+                                 timestamps,
+                                 linear_prediction=kiss_deskew_and_guess)
 
         source, frame_downsample = self.voxelize(frame)
         print("source.shape = ", source.shape)
@@ -497,7 +502,7 @@ class LioEkf:
 
 
         sigma = self.get_sigma_threshold()
-        sigma = 1.5
+        sigma = 2.5
         print("sigma = ", sigma)
         kernel = sigma / 3
         # update state
@@ -514,6 +519,9 @@ class LioEkf:
         # print("exp_datt = ", exp_datt)
 
         initial_guess = self._nav_curr.pose_mat()
+        if kiss_deskew_and_guess:
+            initial_guess = self.kiss_initial_guess()
+        print("initial_guess = \n", initial_guess)
 
         src = np.empty((0, 3))
         src_hl = np.empty((0, 3))
@@ -521,8 +529,6 @@ class LioEkf:
         src_source_hl = np.empty((0, 3))
         tgt = np.empty((0, 3))
         tgt_hl = np.empty((0, 3))
-
-
 
         for it in range(1):
             print(f"--- ITERATION[{it}] =====================:::::")
@@ -550,7 +556,7 @@ class LioEkf:
             # print("h_dx[10] = ", h_dx[:10])
 
             # np.set_printoptions(precision=3, linewidth=180)
-            # print("PREDICTION COV:::::::::::::::::::::\n", self._cov)
+            print("PREDICTION COV:::::::::::::::::::::\n", self._cov)
 
             print("_local_map.size = ", self._local_map.point_cloud().shape)
             print("_local_map_empty = ", self._local_map.empty())
@@ -574,10 +580,14 @@ class LioEkf:
                 np.linalg.inv(new_icp_pose[:3, :3]).transpose())
 
 
-            src = np.matmul(dR @ Rk, src_source_icp.transpose()).transpose(
-            ) + tk + self._nav_err.dpos
-
-
+            # perfect (kiss-icp guided) correspondance src, tgt and src_source
+            src_p = (
+                np.matmul(dR @ Rk, src_source_icp.transpose()).transpose() +
+                tk + self._nav_err.dpos)
+            print("centroid src_p = ", centroid(src_p))
+            print("centroid tgt_p = ", centroid(tgt_icp))
+            print("centroid src - tgt p = ", centroid(src_p) - centroid(tgt_icp))
+            src = src_p
             src_source = src_source_icp
             tgt = tgt_icp
 
@@ -592,6 +602,7 @@ class LioEkf:
 
             print("centroid src = ", centroid(src))
             print("centroid tgt = ", centroid(tgt))
+            print("centroid src  - tgt = ", centroid(src) - centroid(tgt))
 
             # self._cov_scan_meas_inv = np.eye(3)
             print("Ep_inv = ", self._cov_scan_meas_inv)
@@ -606,6 +617,8 @@ class LioEkf:
             # print("rand_idx = ", rand_idx)
             # idxs = [rand_idx] if src.shape[0] > 0 else []
             idxs = list(range(src.shape[0]))
+
+            # keep only some points for residuals (bigger, etc)
             # print("resid_shape = ", resid.shape)
             # resid_norms = np.linalg.norm(resid, axis=1)
             # print("resid_norms_shape = ", resid_norms.shape)
@@ -653,6 +666,8 @@ class LioEkf:
 
             print("delta_x = ", delta_x)
 
+            print("H_plus_cov @ sum_Ji = \n", H_plus_cov @ sum_Ji)
+
             # apply correction error-state
             self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
             self._nav_err.dvel += delta_x[self.VEL_ID:self.VEL_ID + 3]
@@ -681,6 +696,7 @@ class LioEkf:
         self._nav_curr.bias_acc += self._nav_err.dbias_acc
 
 
+        print("\n_nav_prev (pre SCAN UDATED) = \n", self._nav_prev)
         print("_nav_curr (SCAN UDATED) = \n", self._nav_curr)
         print("UPDATED COV:::::::::::::::::::::\n", self._cov)
 
@@ -743,28 +759,58 @@ class LioEkf:
 
 
     def deskew_scan(self, xyz: np.ndarray,
-                    timestamps: np.ndarray) -> np.ndarray:
+                    timestamps: np.ndarray,
+                    linear_prediction: bool=False) -> np.ndarray:
         if len(self._navs) < 1:
             return xyz
-        last_scan_nav = -1
-        for idx, nav in enumerate(self._navs[::-1]):
-            if nav.scan is not None:
-                last_scan_nav = len(self._navs) - 1 - idx
-                break
-        if last_scan_nav < 0 and len(self._navs) > 8 and len(self._navs) < 15:
-            last_scan_nav = 0
+        scan_navs = self._get_scan_nav_idxs()
 
-        if last_scan_nav < 0:
-            return xyz
+        last_scan_nav = 0
+        if len(scan_navs) == 0:
+            if not (len(self._navs) > 8 and len(self._navs) < 15):
+                return xyz
+        else:
+            last_scan_nav = scan_navs[-1]
+
         print("LAST_SCAN_NAV = ", last_scan_nav)
+
+        if linear_prediction and len(scan_navs) < 2:
+            return xyz
+        
+        to_pose = self._nav_curr.pose_mat()
+        if linear_prediction:
+            to_pose = self.kiss_initial_guess()
 
         deskew_frame = kiss_icp_pybind._deskew_scan(
             frame=kiss_icp_pybind._Vector3dVector(xyz),
             timestamps=timestamps,
             start_pose=self._navs[last_scan_nav].pose_mat(),
-            finish_pose=self._nav_curr.pose_mat(),
+            finish_pose=to_pose,
         )
         return np.asarray(deskew_frame)
+
+    def get_kiss_prediction_model(self):
+        scan_navs = self._get_scan_nav_idxs()
+        if len(scan_navs) < 2:
+            return np.eye(4)
+
+        nav_pre = self._navs[scan_navs[-2]]
+        nav_last = self._navs[scan_navs[-1]]
+        return np.linalg.inv(nav_pre.pose_mat()) @ nav_last.pose_mat()
+    
+    def kiss_initial_guess(self):
+        scan_navs = self._get_scan_nav_idxs()
+        if len(scan_navs) < 1:
+            return np.eye(4)
+        if len(scan_navs) < 2:
+            return self._navs[scan_navs[0]].pose_mat()
+        nav_pre = self._navs[scan_navs[-2]]
+        nav_last = self._navs[scan_navs[-1]]
+        pred = np.linalg.inv(nav_pre.pose_mat()) @ nav_last.pose_mat()
+        return nav_last.pose_mat() @ pred
+
+    def _get_scan_nav_idxs(self) -> List[int]:
+        return [i for i, nav in enumerate(self._navs) if nav.scan is not None]
 
     def voxelize(self, orig_frame) -> np.ndarray:
         frame_downsample = voxel_down_sample(
