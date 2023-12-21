@@ -178,9 +178,9 @@ class LioEkf:
 
         self._g_fn = GRAV * np.array([0, 0, -1])
 
-        self._initpos_std = np.diag([10.05, 10.05, 10.05])
-        self._initvel_std = np.diag([5.05, 5.05, 1.05])
-        self._initatt_std = DEG2RAD * np.diag([15.0, 15.0, 15.5])
+        self._initpos_std = np.diag([20.05, 20.05, 20.05])
+        self._initvel_std = np.diag([5.05, 5.05, 5.05])
+        self._initatt_std = DEG2RAD * np.diag([45.0, 45.0, 45.5])
 
         # super good
         # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
@@ -194,7 +194,7 @@ class LioEkf:
         self._gyr_bias_std = 0.01 * DEG2RAD  # rad/s / sqrt(H)
         self._imu_corr_time = 3600  # s
 
-        self._scan_meas_std = 0.04  # 2 cm (OS-0 on 100% refl target)
+        self._scan_meas_std = 0.02  # 2 cm (OS-0 on 100% refl target)
 
         # covariance for error-state Kalman filter
         self._cov = np.zeros((self.STATE_RANK, self.STATE_RANK))
@@ -205,18 +205,18 @@ class LioEkf:
         set_blk(self._cov, self.PHI_ID, self.PHI_ID,
                 np.square(self._initatt_std))
         set_blk(self._cov, self.BG_ID, self.BG_ID,
-                np.square(10* self._gyr_bias_std * np.eye(3)))
+                np.square(self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov, self.BA_ID, self.BA_ID,
-                np.square(10* self._acc_bias_std * np.eye(3)))
+                np.square(self._acc_bias_std * np.eye(3)))
 
         self._cov_init = np.copy(self._cov)
 
         self._cov_imu_bnoise = np.zeros((self.STATE_RANK, self.STATE_RANK))
         corr_coef = 2 / self._imu_corr_time
         set_blk(self._cov_imu_bnoise, self.BG_ID, self.BG_ID,
-                corr_coef * np.square(10* self._gyr_bias_std * np.eye(3)))
+                corr_coef * np.square(self._gyr_bias_std * np.eye(3)))
         set_blk(self._cov_imu_bnoise, self.BA_ID, self.BA_ID,
-                corr_coef * np.square(10* self._acc_bias_std * np.eye(3)))
+                corr_coef * np.square(self._acc_bias_std * np.eye(3)))
 
         self._cov_mnoise = np.zeros((6, 6))
         set_blk(self._cov_mnoise, 0, 0, np.square(self._acc_vrw * np.eye(3)))
@@ -299,6 +299,7 @@ class LioEkf:
         self._nav_curr.vel = np.zeros(3)
         self._nav_curr.att_h = np.eye(3)
         self._nav_prev = deepcopy(self._nav_curr)
+        self._cov = np.copy(self._cov_init)
         print("------ RESET --- NAV -----")
 
     def _reset_nav_err(self):
@@ -340,8 +341,8 @@ class LioEkf:
 
         self._nav_curr.vel = self._nav_prev.vel + delta_vgrav + delta_v_fn
 
-        self._nav_curr.pos = self._nav_prev.pos + 0.5 * (self._nav_curr.vel +
-                                                         self._nav_prev.vel)
+        self._nav_curr.pos = self._nav_prev.pos + 0.5 * sk * (
+            self._nav_curr.vel + self._nav_prev.vel)
 
         rot_vec_b = imucurr_angle + np.cross(imupre_angle, imucurr_angle) / 12
         self._nav_curr.att_h = self._nav_prev.att_h @ exp_rot_vec(rot_vec_b)
@@ -360,9 +361,9 @@ class LioEkf:
 
 
 
-        # print(f"after velocity: {self._nav_curr.vel = }")
-        # print(f"after position: {self._nav_curr.pos = }")
-        # print(f"after rotation:\n {self._nav_curr.att_h}\n")
+        print(f"after velocity: {self._nav_curr.vel = }")
+        print(f"after position: {self._nav_curr.pos = }")
+        print(f"after rotation:\n {self._nav_curr.att_h}\n")
 
 
     def processImuPacket(self, imu_packet: client.ImuPacket) -> None:
@@ -402,6 +403,8 @@ class LioEkf:
         self._insMech()
 
         sk = self._imu_curr.dt
+
+        print("SK = ", sk)
 
         # update error-state (delta X)
         # TODO: Use real R(k-1)!
@@ -489,12 +492,13 @@ class LioEkf:
         print("timestamps.size = ", timestamps.shape)
 
         # debug
-        kiss_deskew_and_guess = False
+        kiss_deskew = True
+        kiss_guess = True
 
         # deskew
         frame = self.deskew_scan(xyz,
                                  timestamps,
-                                 linear_prediction=kiss_deskew_and_guess)
+                                 linear_prediction=kiss_deskew)
 
         source, frame_downsample = self.voxelize(frame)
         print("source.shape = ", source.shape)
@@ -519,7 +523,7 @@ class LioEkf:
         # print("exp_datt = ", exp_datt)
 
         initial_guess = self._nav_curr.pose_mat()
-        if kiss_deskew_and_guess:
+        if kiss_guess:
             initial_guess = self.kiss_initial_guess()
         print("initial_guess = \n", initial_guess)
 
@@ -607,11 +611,7 @@ class LioEkf:
             # self._cov_scan_meas_inv = np.eye(3)
             print("Ep_inv = ", self._cov_scan_meas_inv)
 
-            Ji = np.zeros((3, self.STATE_RANK))
-            sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
-            set_blk(Ji, 0, 0, -1.0 * np.eye(3))
-            print("Ji init = \n", Ji)
-            sum_res = np.zeros(self.STATE_RANK)
+
             # rand_idx = np.random.randint(0, src.shape[0], 10) if src.shape[0] > 0 else []
             # rand_idx = 2967
             # print("rand_idx = ", rand_idx)
@@ -633,6 +633,14 @@ class LioEkf:
             src_hl = src[idxs]
             tgt_hl = tgt[idxs]
             src_source_hl = src_source[idxs]
+
+            sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
+            sum_res = np.zeros(self.STATE_RANK)
+
+            Ji = np.zeros((3, self.STATE_RANK))
+            set_blk(Ji, 0, self.POS_ID, -1.0 * np.eye(3))
+            print("Ji init = \n", Ji)
+
             for i in idxs:
                 set_blk(Ji, 0, self.PHI_ID, vee(1.0 * Rk @ src_source[i]))
                 # print(f"src_source[{i}] = \n", src_source[i])
@@ -649,6 +657,31 @@ class LioEkf:
 
             print("sum_Ji = \n", sum_Ji)
             print("sum_res = \n", sum_res)
+            
+            # HACK update velocity
+            scan_navs = self._get_scan_nav_idxs()
+            if len(scan_navs) == 1:
+                # last_pose = self._nav_curr.pose_mat()
+                last_pose = new_icp_pose
+                prev_pose = self._navs[scan_navs[0]].pose_mat()
+                dp = np.linalg.inv(prev_pose) @ last_pose
+                dt = self._imu_curr.ts - self._navs_t[scan_navs[0]]
+                print("DP = ", dp)
+                print("DT = ", dt)
+                vel = dp[:3, 3] / dt
+                print("VEL = ", vel)
+                # self._nav_curr.vel = vel
+
+                # add to measurement sets
+                Jv = np.zeros((3, self.STATE_RANK))
+                set_blk(Jv, 0, self.VEL_ID, 1.0 * np.eye(3))
+                Ev_inv = np.linalg.inv(0.001 * np.eye(3))
+                sum_Ji += Jv.transpose() @ Ev_inv @ Jv
+                sum_res += Jv.transpose() @ Ev_inv @ (
+                    vel - self._nav_curr.vel - self._nav_err.dvel)
+
+                print("sum_Ji + V = \n", sum_Ji)
+                print("sum_res + V = \n", sum_res)
             # print("sum_res.shape = ", sum_res.shape)
 
             # delta_xx = np.linalg.lstsq(sum_Ji, sum_res, rcond=None)
@@ -694,6 +727,20 @@ class LioEkf:
         # self._nav_curr.att_h = new_icp_pose[:3, :3]
         self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
         self._nav_curr.bias_acc += self._nav_err.dbias_acc
+
+
+        # HACK update velocity
+        # scan_navs = self._get_scan_nav_idxs()
+        # if len(scan_navs) == 1:
+        #     last_pose = self._nav_curr.pose_mat()
+        #     prev_pose = self._navs[scan_navs[0]].pose_mat()
+        #     dp = np.linalg.inv(prev_pose) @ last_pose
+        #     dt = self._imu_curr.ts - self._navs_t[scan_navs[0]]
+        #     print("DP = ", dp)
+        #     print("DT = ", dt)
+        #     vel = dp[:3, 3] / dt
+        #     print("VEL = ", vel)
+        #     self._nav_curr.vel = vel
 
 
         print("\n_nav_prev (pre SCAN UDATED) = \n", self._nav_prev)
@@ -776,7 +823,7 @@ class LioEkf:
 
         if linear_prediction and len(scan_navs) < 2:
             return xyz
-        
+
         to_pose = self._nav_curr.pose_mat()
         if linear_prediction:
             to_pose = self.kiss_initial_guess()
@@ -797,7 +844,7 @@ class LioEkf:
         nav_pre = self._navs[scan_navs[-2]]
         nav_last = self._navs[scan_navs[-1]]
         return np.linalg.inv(nav_pre.pose_mat()) @ nav_last.pose_mat()
-    
+
     def kiss_initial_guess(self):
         scan_navs = self._get_scan_nav_idxs()
         if len(scan_navs) < 1:
@@ -1098,7 +1145,7 @@ class LioEkfScans(client.ScanSource):
         # ax.set_zlabel('Z')
         '''
 
-        mplot = False
+        mplot = True
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
