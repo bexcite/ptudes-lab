@@ -24,10 +24,16 @@ from ouster.viz import PointViz, LidarScanViz, SimpleViz
     help="Metadata for PCAP/BAG, required if automatic metadata resolution fails")
 @click.option("--start-scan", type=int, default=0, help="Start scan number")
 @click.option("--end-scan", type=int, help="End scan number, inclusive")
+@click.option("-p",
+              "--plot",
+              required=False,
+              type=str,
+              help="Plotting option [graphs, point_viz]")
 def ptudes_odom(file: str,
                 meta: Optional[str],
                 start_scan: int,
-                end_scan: Optional[int] = None) -> None:
+                end_scan: Optional[int] = None,
+                plot: Optional[str] = None) -> None:
     """Ouster Lidar Odometry"""
 
     meta = resolve_metadata(file, meta)
@@ -40,7 +46,8 @@ def ptudes_odom(file: str,
     packet_source = read_packet_source(file, meta=info)
     odom_scans = LioEkfScans(packet_source,
                              _start_scan=start_scan,
-                             _end_scan=end_scan)
+                             _end_scan=end_scan,
+                             _plotting=plot)
 
     for ls in odom_scans:
         print("==" * 30)

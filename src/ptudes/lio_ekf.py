@@ -21,6 +21,8 @@ from kiss_icp.kiss_icp import KissICP
 
 import matplotlib.pyplot as plt
 
+from ptudes.kiss import KissICPWrapper
+
 from dataclasses import dataclass
 
 RED_COLOR = np.array([1.0, 0.1, 0.1, 1.0])  # RGBA
@@ -167,9 +169,12 @@ class LioEkf:
         self._metadata = metadata
 
         imu_to_sensor = self._metadata.imu_to_sensor_transform.copy()
-        imu_to_sensor[:3, 3] /= 1000
+        imu_to_sensor[:3, 3] /= 1000  # mm to m convertion
         self._sensor_to_imu = np.linalg.inv(imu_to_sensor)
 
+        # exploiting extrinsics mechanics of Ouster SDK to
+        # make an XYZLut that transforms lidar points to the
+        #  Nav (imu) frame
         self._metadata.extrinsic = self._sensor_to_imu
         self._xyz_lut = client.XYZLut(self._metadata, use_extrinsics=True)
 
@@ -182,16 +187,17 @@ class LioEkf:
         self._initvel_std = np.diag([5.05, 5.05, 5.05])
         self._initatt_std = DEG2RAD * np.diag([45.0, 45.0, 45.5])
 
-        # super good
-        # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
-        # self._gyr_arw = 1 * DEG2RAD  #  rad/s
-        # self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
-        # self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
-
+        # super good (from IMU IAM-20680HT Datasheet)
         self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
-        self._gyr_arw = 10 * DEG2RAD  #  rad/s
-        self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(H)
-        self._gyr_bias_std = 0.01 * DEG2RAD  # rad/s / sqrt(H)
+        self._gyr_arw = 1 * DEG2RAD  #  rad/s
+        self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
+        self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
+
+        # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
+        # self._gyr_arw = 10 * DEG2RAD  #  rad/s
+        # self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(H)
+        # self._gyr_bias_std = 0.01 * DEG2RAD  # rad/s / sqrt(H)
+
         self._imu_corr_time = 3600  # s
 
         self._scan_meas_std = 0.02  # 2 cm (OS-0 on 100% refl target)
@@ -237,10 +243,6 @@ class LioEkf:
 
         self._start_ts = -1
 
-        # self._last_imup_ts = -1
-        self._last_lidarp_ts = -1
-        self._last_scan_ts = -1
-
         self._nav_curr = NavState()
 
         # total_imu: accel =  [-0.93531433  0.36841277  0.23654302]
@@ -258,16 +260,21 @@ class LioEkf:
 
         self._reset_nav()
 
-
-
         self._imu_prev = IMU()
         self._imu_curr = IMU()
 
-        kiss_icp_config = load_config(None, deskew=True, max_range = 100)
-        self._kiss_icp = KissICP(config=kiss_icp_config)
-        self._local_map = get_voxel_hash_map(self._kiss_icp.config)
-        self._adaptive_threshold = get_threshold_estimator(self._kiss_icp.config)
-        print("kiss_icp = ", kiss_icp_config)
+
+        self._booting = True
+        self._kiss_icp = KissICPWrapper(self._metadata,
+                                        _use_extrinsics=True,
+                                        _min_range=2,
+                                        _max_range=70)
+
+        # kiss_icp_config = load_config(None, deskew=True, max_range = 100)
+        # self._kiss_icp = KissICP(config=kiss_icp_config)
+        self._local_map = get_voxel_hash_map(self._kiss_icp._config)
+        self._adaptive_threshold = get_threshold_estimator(self._kiss_icp._config)
+        print("kiss_icp = ", self._kiss_icp._config)
         print("adaptive_threshold = ", self._adaptive_threshold)
         # exit(0)
 
@@ -298,6 +305,8 @@ class LioEkf:
         self._nav_curr.pos = np.zeros(3)
         self._nav_curr.vel = np.zeros(3)
         self._nav_curr.att_h = np.eye(3)
+        self._nav_curr.bias_acc = np.zeros(3)
+        self._nav_curr.bias_gyr = np.zeros(3)
         self._nav_prev = deepcopy(self._nav_curr)
         self._cov = np.copy(self._cov_init)
         print("------ RESET --- NAV -----")
@@ -361,9 +370,9 @@ class LioEkf:
 
 
 
-        print(f"after velocity: {self._nav_curr.vel = }")
-        print(f"after position: {self._nav_curr.pos = }")
-        print(f"after rotation:\n {self._nav_curr.att_h}\n")
+        # print(f"after velocity: {self._nav_curr.vel = }")
+        # print(f"after position: {self._nav_curr.pos = }")
+        # print(f"after rotation:\n {self._nav_curr.att_h}\n")
 
 
     def processImuPacket(self, imu_packet: client.ImuPacket) -> None:
@@ -466,12 +475,6 @@ class LioEkf:
         # print(f"processImu: acc={self._imu_curr.lacc}, gyr={self._imu_curr.avel}")
         # print(f"      prev: acc={self._imu_prev.lacc}, gyr={self._imu_prev.avel}")
 
-        # if self._last_imup_ts < 0:
-        #     self._last_imup_ts = local_ts
-        #     print("first IMU")
-        #     return
-
-        # self._last_imup_ts = local_ts
 
     def processLidarPacket(self, lidar_packet: client.LidarPacket) -> None:
         col_ts = lidar_packet.timestamp[0]
@@ -480,7 +483,11 @@ class LioEkf:
         #       f"processLidar: {lidar_packet = }")
 
     def processLidarScan(self, ls: client.LidarScan) -> None:
-        ls_ts = scan_begin_ts(ls)
+        
+        if self._booting:            
+            self._kiss_icp.register_frame(ls)
+            print("BOOTING: .... kiss icp pose:\n", self._kiss_icp.pose)
+            print("  and velocity: ", self._kiss_icp.velocity)
 
         # get XYZ points
         timestamps = np.tile(np.linspace(0, 1.0, ls.w, endpoint=False), (ls.h, 1))
@@ -488,8 +495,8 @@ class LioEkf:
         sel_flag = ls.field(ChanField.RANGE) != 0
         xyz = self._xyz_lut(ls)[sel_flag]
         timestamps = timestamps[sel_flag]
-        print("ls.size = ", xyz.shape)
-        print("timestamps.size = ", timestamps.shape)
+        # print("ls.size = ", xyz.shape)
+        # print("timestamps.size = ", timestamps.shape)
 
         # debug
         kiss_deskew = True
@@ -498,7 +505,7 @@ class LioEkf:
         # deskew
         frame = self.deskew_scan(xyz,
                                  timestamps,
-                                 linear_prediction=kiss_deskew)
+                                 linear_prediction=self._booting)
 
         source, frame_downsample = self.voxelize(frame)
         print("source.shape = ", source.shape)
@@ -637,51 +644,89 @@ class LioEkf:
             sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
             sum_res = np.zeros(self.STATE_RANK)
 
-            Ji = np.zeros((3, self.STATE_RANK))
-            set_blk(Ji, 0, self.POS_ID, -1.0 * np.eye(3))
-            print("Ji init = \n", Ji)
+            if not self._booting:
 
-            for i in idxs:
-                set_blk(Ji, 0, self.PHI_ID, vee(1.0 * Rk @ src_source[i]))
-                # print(f"src_source[{i}] = \n", src_source[i])
-                # print(f"Ji[{i}] = \n", Ji)
-                # print(f"resid[{i}] =", resid[i])
-                # input()
-                # w = np.square(kernel) / np.square(kernel + np.linalg.norm(resid[i]))
-                # print(f"w[{i}] = ", w)
-                # w_mat = w * np.eye(3)
-                sum_Ji += Ji.transpose() @ self._cov_scan_meas_inv @ Ji
-                sum_res += Ji.transpose() @ self._cov_scan_meas_inv @ resid[i]
-                # print("ooooo i = ", i)
-                # print("sum_res = \n", sum_res)
+                Ji = np.zeros((3, self.STATE_RANK))
+                set_blk(Ji, 0, self.POS_ID, -1.0 * np.eye(3))
+                print("Ji init = \n", Ji)
+
+                for i in idxs:
+                    set_blk(Ji, 0, self.PHI_ID, vee(1.0 * Rk @ src_source[i]))
+                    # print(f"src_source[{i}] = \n", src_source[i])
+                    # print(f"Ji[{i}] = \n", Ji)
+                    # print(f"resid[{i}] =", resid[i])
+                    # input()
+                    # w = np.square(kernel) / np.square(kernel + np.linalg.norm(resid[i]))
+                    # print(f"w[{i}] = ", w)
+                    # w_mat = w * np.eye(3)
+                    sum_Ji += Ji.transpose() @ self._cov_scan_meas_inv @ Ji
+                    sum_res += Ji.transpose() @ self._cov_scan_meas_inv @ resid[i]
+                    # print("ooooo i = ", i)
+                    # print("sum_res = \n", sum_res)
+
+            else:
+                pos = self._kiss_icp.pose[:3, 3]
+                # add to measurement sets
+                Jp = np.zeros((3, self.STATE_RANK))
+                set_blk(Jp, 0, self.POS_ID, 1.0 * np.eye(3))
+                Epos_inv = np.linalg.inv(0.01 * np.eye(3))
+                sum_Ji += Jp.transpose() @ Epos_inv @ Jp
+                sum_res += Jp.transpose() @ Epos_inv @ (
+                    pos - self._nav_curr.pos - self._nav_err.dpos)
+                print("sum_Ji + Pos = \n", sum_Ji)
+                print("sum_res + Pos = \n", sum_res)
+
+                if len(self._kiss_icp.poses) >= 2:
+                    # last_pose = self._nav_curr.pose_mat()
+                    # last_pose = new_icp_pose
+                    # prev_pose = self._navs[scan_navs[0]].pose_mat()
+                    # dp = np.linalg.inv(prev_pose) @ last_pose
+                    # dt = self._imu_curr.ts - self._navs_t[scan_navs[0]]
+                    # print("DP = ", dp)
+                    # print("DT = ", dt)
+                    # vel = dp[:3, 3] / dt
+                    vel = self._kiss_icp.velocity
+                    print("VEL = ", vel)
+                    # self._nav_curr.vel = vel
+
+                    # add to measurement sets
+                    Jv = np.zeros((3, self.STATE_RANK))
+                    set_blk(Jv, 0, self.VEL_ID, 1.0 * np.eye(3))
+                    Ev_inv = np.linalg.inv(0.001 * np.eye(3))
+                    sum_Ji += Jv.transpose() @ Ev_inv @ Jv
+                    sum_res += Jv.transpose() @ Ev_inv @ (
+                        vel - self._nav_curr.vel - self._nav_err.dvel)
+
+                    print("sum_Ji + V = \n", sum_Ji)
+                    print("sum_res + V = \n", sum_res)    
 
             print("sum_Ji = \n", sum_Ji)
             print("sum_res = \n", sum_res)
-            
+
             # HACK update velocity
-            scan_navs = self._get_scan_nav_idxs()
-            if len(scan_navs) == 1:
-                # last_pose = self._nav_curr.pose_mat()
-                last_pose = new_icp_pose
-                prev_pose = self._navs[scan_navs[0]].pose_mat()
-                dp = np.linalg.inv(prev_pose) @ last_pose
-                dt = self._imu_curr.ts - self._navs_t[scan_navs[0]]
-                print("DP = ", dp)
-                print("DT = ", dt)
-                vel = dp[:3, 3] / dt
-                print("VEL = ", vel)
-                # self._nav_curr.vel = vel
+            # scan_navs = self._get_scan_nav_idxs()
+            # if len(scan_navs) == 1:
+            #     # last_pose = self._nav_curr.pose_mat()
+            #     last_pose = new_icp_pose
+            #     prev_pose = self._navs[scan_navs[0]].pose_mat()
+            #     dp = np.linalg.inv(prev_pose) @ last_pose
+            #     dt = self._imu_curr.ts - self._navs_t[scan_navs[0]]
+            #     print("DP = ", dp)
+            #     print("DT = ", dt)
+            #     vel = dp[:3, 3] / dt
+            #     print("VEL = ", vel)
+            #     # self._nav_curr.vel = vel
 
-                # add to measurement sets
-                Jv = np.zeros((3, self.STATE_RANK))
-                set_blk(Jv, 0, self.VEL_ID, 1.0 * np.eye(3))
-                Ev_inv = np.linalg.inv(0.001 * np.eye(3))
-                sum_Ji += Jv.transpose() @ Ev_inv @ Jv
-                sum_res += Jv.transpose() @ Ev_inv @ (
-                    vel - self._nav_curr.vel - self._nav_err.dvel)
+            #     # add to measurement sets
+            #     Jv = np.zeros((3, self.STATE_RANK))
+            #     set_blk(Jv, 0, self.VEL_ID, 1.0 * np.eye(3))
+            #     Ev_inv = np.linalg.inv(0.001 * np.eye(3))
+            #     sum_Ji += Jv.transpose() @ Ev_inv @ Jv
+            #     sum_res += Jv.transpose() @ Ev_inv @ (
+            #         vel - self._nav_curr.vel - self._nav_err.dvel)
 
-                print("sum_Ji + V = \n", sum_Ji)
-                print("sum_res + V = \n", sum_res)
+            #     print("sum_Ji + V = \n", sum_Ji)
+            #     print("sum_res + V = \n", sum_res)
             # print("sum_res.shape = ", sum_res.shape)
 
             # delta_xx = np.linalg.lstsq(sum_Ji, sum_res, rcond=None)
@@ -825,8 +870,8 @@ class LioEkf:
             return xyz
 
         to_pose = self._nav_curr.pose_mat()
-        if linear_prediction:
-            to_pose = self.kiss_initial_guess()
+        if linear_prediction and self._booting:
+            to_pose = self._kiss_icp.pose
 
         deskew_frame = kiss_icp_pybind._deskew_scan(
             frame=kiss_icp_pybind._Vector3dVector(xyz),
@@ -861,13 +906,13 @@ class LioEkf:
 
     def voxelize(self, orig_frame) -> np.ndarray:
         frame_downsample = voxel_down_sample(
-            orig_frame, self._kiss_icp.config.mapping.voxel_size * 0.5)
+            orig_frame, self._kiss_icp._config.mapping.voxel_size * 0.5)
         source = voxel_down_sample(frame_downsample,
-                                   self._kiss_icp.config.mapping.voxel_size)
+                                   self._kiss_icp._config.mapping.voxel_size)
         return source, frame_downsample
 
     def get_sigma_threshold(self) -> float:
-        adaptive = (self._kiss_icp.config.adaptive_threshold.initial_threshold
+        adaptive = (self._kiss_icp._config.adaptive_threshold.initial_threshold
                     if not self.has_moved() else
                     self._adaptive_threshold.get_threshold())
         print("ADAOTIVE ==== ", adaptive)
@@ -878,7 +923,7 @@ class LioEkf:
             return False
         compute_motion = lambda T1, T2: np.linalg.norm((np.linalg.inv(T1) @ T2)[:3, -1])
         motion = compute_motion(self._navs[0].pose_mat(), self._navs[-1].pose_mat())
-        return motion > 5 * self._kiss_icp.config.adaptive_threshold.min_motion_th
+        return motion > 5 * self._kiss_icp._config.adaptive_threshold.min_motion_th
 
     def _check_start_ts(self, ts: int) -> int:
         if self._start_ts < 0:
@@ -897,8 +942,10 @@ class LioEkfScans(client.ScanSource):
                  *,
                  fields: Optional[FieldTypes] = None,
                  _start_scan: Optional[int] = None,
-                 _end_scan: Optional[int] = None) -> None:
+                 _end_scan: Optional[int] = None,
+                 _plotting: Optional[str] = None) -> None:
         self._source = source
+        self._plotting = _plotting
 
         self._start_scan = _start_scan or 0
         self._end_scan = _end_scan
@@ -963,8 +1010,10 @@ class LioEkfScans(client.ScanSource):
             elif isinstance(packet, client.ImuPacket):
                 if self._start_scan == 0 or scan_idx >= self._start_scan:
 
-                    # acc_x = 0.1 if imu_idx < 10 else 0
+                    # acc_x = 0.1 if imu_idx < 100 else 0
                     # acc_y = 0.0 if imu_idx < 10 else 0.1
+                    # acc_x = 2.0
+                    # acc_y = 0.0
 
                     # acc = [acc_x, acc_y, GRAV]
                     # gyr = [0, 0, 5.0]
@@ -1013,7 +1062,6 @@ class LioEkfScans(client.ScanSource):
         # print(f"lg_accel = {self._lio_ekf._lg_acc}")
 
         # plt.cla()
-
 
         t = [t - min_ts for t in self._lio_ekf._lg_t]
         acc_x = [a[0] for a in self._lio_ekf._lg_acc]
@@ -1145,14 +1193,21 @@ class LioEkfScans(client.ScanSource):
         # ax.set_zlabel('Z')
         '''
 
+        if self._plotting is None:
+            return
+
         mplot = True
 
         # plt.plot(t, acc_x, "r", label="acc_x")
         # plt.grid(True)
-        if mplot:
+        if self._plotting == "graphs":
             plt.show()
             return
 
+        if self._plotting != "point_viz":
+            print(f"WARNING: plotting param '{self._plotting}' doesn't "
+                  f"supported")
+            return
 
 
         import ouster.viz as viz
