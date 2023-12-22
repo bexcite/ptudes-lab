@@ -6,7 +6,7 @@ import ouster.sdk.pose_util as pu
 
 import numpy as np
 
-INIT_POINT_CLOUD_SIZE = 300000
+INIT_POINT_CLOUD_SIZE = 1000000
 
 class PointCloud:
     """Helper to draw unstructured point cloud with PointViz"""

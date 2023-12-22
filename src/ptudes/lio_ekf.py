@@ -1,6 +1,7 @@
 from typing import Optional, Iterable, Union, List, Dict
 
 import numpy as np
+import scipy
 from copy import deepcopy
 
 from ouster.client import (SensorInfo, LidarScan, ChanField, FieldTypes,
@@ -483,8 +484,8 @@ class LioEkf:
         #       f"processLidar: {lidar_packet = }")
 
     def processLidarScan(self, ls: client.LidarScan) -> None:
-        
-        if self._booting:            
+
+        if self._booting:
             self._kiss_icp.register_frame(ls)
             print("BOOTING: .... kiss icp pose:\n", self._kiss_icp.pose)
             print("  and velocity: ", self._kiss_icp.velocity)
@@ -665,14 +666,30 @@ class LioEkf:
                     # print("sum_res = \n", sum_res)
 
             else:
+                print("KISS_ALL_POSES = ", self._kiss_icp.poses)
+                scan_navs = [self._navs[sn] for sn in self._get_scan_nav_idxs()]
+
+                print("ALL_NAVS_POSES = ", scan_navs)
+
                 pos = self._kiss_icp.pose[:3, 3]
+                rot = self._kiss_icp.pose[:3, :3]
                 # add to measurement sets
-                Jp = np.zeros((3, self.STATE_RANK))
+                Jp = np.zeros((6, self.STATE_RANK))
                 set_blk(Jp, 0, self.POS_ID, 1.0 * np.eye(3))
-                Epos_inv = np.linalg.inv(0.01 * np.eye(3))
-                sum_Ji += Jp.transpose() @ Epos_inv @ Jp
-                sum_res += Jp.transpose() @ Epos_inv @ (
-                    pos - self._nav_curr.pos - self._nav_err.dpos)
+                set_blk(Jp, 3, self.PHI_ID, 1.0 * np.eye(3))
+                Epos_inv = np.linalg.inv(0.0001 * np.eye(3))
+                Eatt_inv = np.linalg.inv(0.0001 * np.eye(3))
+                Epa = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
+                # Epa = scipy.linalg.block_diag(Epos_inv)
+                print("Epa = ", Epa)
+                sum_Ji += Jp.transpose() @ Epa @ Jp
+                resid_pa = np.zeros(6)
+                resid_pa[:3] = pos - self._nav_curr.pos - self._nav_err.dpos
+                Rk_inv = np.linalg.inv(Rk)
+                dR_inv = np.linalg.inv(dR)
+                resid_pa[3:] = log_rot_mat(rot @ Rk_inv @ dR_inv)
+                print("resid_pa = ", resid_pa)
+                sum_res += Jp.transpose() @ Epa @ resid_pa
                 print("sum_Ji + Pos = \n", sum_Ji)
                 print("sum_res + Pos = \n", sum_res)
 
@@ -698,7 +715,7 @@ class LioEkf:
                         vel - self._nav_curr.vel - self._nav_err.dvel)
 
                     print("sum_Ji + V = \n", sum_Ji)
-                    print("sum_res + V = \n", sum_res)    
+                    print("sum_res + V = \n", sum_res)
 
             print("sum_Ji = \n", sum_Ji)
             print("sum_res = \n", sum_res)
@@ -749,7 +766,10 @@ class LioEkf:
             # apply correction error-state
             self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
             self._nav_err.dvel += delta_x[self.VEL_ID:self.VEL_ID + 3]
-            self._nav_err.datt_v += delta_x[self.PHI_ID:self.PHI_ID + 3]
+            # self._nav_err.datt_v += delta_x[self.PHI_ID:self.PHI_ID + 3]
+            self._nav_err.datt_v = log_rot_mat(
+                exp_rot_vec(delta_x[self.PHI_ID:self.PHI_ID + 3])
+                @ exp_rot_vec(self._nav_err.datt_v))
             self._nav_err.dbias_gyr += delta_x[self.BG_ID:self.BG_ID + 3]
             self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
 
@@ -1260,6 +1280,15 @@ class LioEkfScans(client.ScanSource):
                 self.tgt_hl.toggle()
                 self.local_map.toggle()
 
+            def disable(self):
+                self.src_source.disable()
+                self.src_source_hl.disable()
+                self.src.disable()
+                self.src_hl.disable()
+                self.tgt.disable()
+                self.tgt_hl.disable()
+                self.local_map.disable()
+
         clouds: Dict[int, CloudsStruct] = dict()
 
         def set_cloud_from_idx(idx: int):
@@ -1299,6 +1328,8 @@ class LioEkfScans(client.ScanSource):
         def handle_keys(ctx, key, mods) -> bool:
             nonlocal target_idx
             if key == 32:
+                if target_idx in clouds:
+                    clouds[target_idx].disable()
                 target_idx = next_scan_based_nav(self._lio_ekf._navs,
                                                  start_idx=target_idx + 1)
                 target_nav = self._lio_ekf._navs[target_idx]
