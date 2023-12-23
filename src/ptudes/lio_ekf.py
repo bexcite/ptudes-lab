@@ -59,6 +59,7 @@ class NavState:
     bias_gyr: np.ndarray = np.zeros(3)  # Vec3
     bias_acc: np.ndarray = np.zeros(3) # Vec3
 
+    # NavStateLog for viz/debug parts
     scan: Optional[LidarScan] = None
 
     frame: Optional[np.ndarray] = None
@@ -237,12 +238,8 @@ class LioEkf:
         self._nav_err = NavErrState()
         self._reset_nav_err()
 
-        # print(f"_cov = \n", self._cov.diagonal())
-
         self._imu_idx = 0
         self._scan_idx = 0
-
-        self._start_ts = -1
 
         self._nav_curr = NavState()
 
@@ -261,10 +258,12 @@ class LioEkf:
 
         self._reset_nav()
 
+        # imu mechanisation
         self._imu_prev = IMU()
         self._imu_curr = IMU()
 
 
+        # use KISS-ICP as a bootstrapping/initialization source
         self._booting = True
         self._kiss_icp = KissICPWrapper(self._metadata,
                                         _use_extrinsics=True,
@@ -274,13 +273,14 @@ class LioEkf:
         # kiss_icp_config = load_config(None, deskew=True, max_range = 100)
         # self._kiss_icp = KissICP(config=kiss_icp_config)
         self._local_map = get_voxel_hash_map(self._kiss_icp._config)
-        self._adaptive_threshold = get_threshold_estimator(self._kiss_icp._config)
-        print("kiss_icp = ", self._kiss_icp._config)
-        print("adaptive_threshold = ", self._adaptive_threshold)
+        # self._adaptive_threshold = get_threshold_estimator(self._kiss_icp._config)
+        # print("kiss_icp = ", self._kiss_icp._config)
+        # print("adaptive_threshold = ", self._adaptive_threshold)
         # exit(0)
 
         self._navs = []  # nav states (full, after the update on scan)
         self._navs_t = []
+        self._nav_scan_idxs = []  # idxs to _navs with scans
 
         self._imu_total = IMU()
         self._imu_total_cnt = 0
@@ -290,14 +290,6 @@ class LioEkf:
         self._lg_t = []
         self._lg_acc = []
         self._lg_gyr = []
-        self._lg_pos = []
-        self._lg_vel = []
-        self._lg_biasa = []
-        self._lg_biasg = []
-
-
-        self._lg_scan = []
-        # self._lg_dsp = []
 
         print(f"init: nav_pre  = {self._nav_prev}")
         print(f"init: nav_curr = {self._nav_curr}")
@@ -378,7 +370,6 @@ class LioEkf:
 
     def processImuPacket(self, imu_packet: client.ImuPacket) -> None:
         # imu_ts = imu_packet.sys_ts
-        # local_ts = self._check_start_ts(imu_ts) / 10**9
 
         # self._imu_prev = self._imu_curr
 
@@ -414,7 +405,7 @@ class LioEkf:
 
         sk = self._imu_curr.dt
 
-        print("SK = ", sk)
+        # print("SK = ", sk)
 
         # update error-state (delta X)
         # TODO: Use real R(k-1)!
@@ -450,14 +441,13 @@ class LioEkf:
         # np.set_printoptions(precision=3, linewidth=180)
         # print("UPDATED COV:::::::::::::::::::::\n", self._cov)
 
+        self._nav_prev = deepcopy(self._nav_curr)
 
-        # logging
+
+        # logging IMU data for graphs
         self._lg_t += [self._imu_curr.ts]
         self._lg_acc += [self._imu_curr.lacc]
         self._lg_gyr += [self._imu_curr.avel]
-
-        self._nav_prev = deepcopy(self._nav_curr)
-
 
 
         # test only when processLidarScan is disabled
@@ -479,7 +469,6 @@ class LioEkf:
 
     def processLidarPacket(self, lidar_packet: client.LidarPacket) -> None:
         col_ts = lidar_packet.timestamp[0]
-        local_ts = self._check_start_ts(col_ts) / 10**9
         # print(f"ts: {col_ts}, local_ts: {local_ts:.6f}, "
         #       f"processLidar: {lidar_packet = }")
 
@@ -488,7 +477,7 @@ class LioEkf:
         if self._booting:
             self._kiss_icp.register_frame(ls)
             print("BOOTING: .... kiss icp pose:\n", self._kiss_icp.pose)
-            print("  and velocity: ", self._kiss_icp.velocity)
+            print("velocity: ", self._kiss_icp.velocity)
 
         # get XYZ points
         timestamps = np.tile(np.linspace(0, 1.0, ls.w, endpoint=False), (ls.h, 1))
@@ -513,7 +502,7 @@ class LioEkf:
         print("frame_downsample.shape = ", frame_downsample.shape)
 
 
-        sigma = self.get_sigma_threshold()
+        # sigma = self.get_sigma_threshold()
         sigma = 2.5
         print("sigma = ", sigma)
         kernel = sigma / 3
@@ -814,8 +803,8 @@ class LioEkf:
 
         new_pose = self._nav_curr.pose_mat()
 
-        self._adaptive_threshold.update_model_deviation(
-            np.linalg.inv(initial_guess) @ new_pose)
+        # self._adaptive_threshold.update_model_deviation(
+        #     np.linalg.inv(initial_guess) @ new_pose)
 
         self._reset_nav_err()
 
@@ -850,6 +839,7 @@ class LioEkf:
 
         self._navs += [store_nav]
         self._navs_t += [self._imu_curr.ts]
+        self._nav_scan_idxs += [len(self._navs) - 1]
 
         # print("navs = \n", self._navs[-3:])
         # print("navs_t = \n", self._navs_t[-3:])
@@ -861,13 +851,11 @@ class LioEkf:
 
         self._nav_prev = deepcopy(self._nav_curr)
 
+        self._scan_idx += 1
+
         # print("_nav_prev = \n", self._nav_prev)
 
         # input()
-
-        self._lg_scan += [ls]
-        # self._lg_dsp += [(scan_begin_ts(ls), self._nav_curr.pos)]
-        # self._reset_nav()
 
 
     def deskew_scan(self, xyz: np.ndarray,
@@ -922,7 +910,7 @@ class LioEkf:
         return nav_last.pose_mat() @ pred
 
     def _get_scan_nav_idxs(self) -> List[int]:
-        return [i for i, nav in enumerate(self._navs) if nav.scan is not None]
+        return self._nav_scan_idxs
 
     def voxelize(self, orig_frame) -> np.ndarray:
         frame_downsample = voxel_down_sample(
@@ -944,15 +932,6 @@ class LioEkf:
         compute_motion = lambda T1, T2: np.linalg.norm((np.linalg.inv(T1) @ T2)[:3, -1])
         motion = compute_motion(self._navs[0].pose_mat(), self._navs[-1].pose_mat())
         return motion > 5 * self._kiss_icp._config.adaptive_threshold.min_motion_th
-
-    def _check_start_ts(self, ts: int) -> int:
-        if self._start_ts < 0:
-            self._start_ts = ts
-        if ts < self._start_ts:
-            print("OH!!!! ts = ", ts, ", start_ts = ", self._start_ts)
-            return 0
-        return ts - self._start_ts
-
 
 
 class LioEkfScans(client.ScanSource):
@@ -1057,7 +1036,7 @@ class LioEkfScans(client.ScanSource):
 
         print(f"Finished: imu_idx = {imu_idx}, "
               f"scan_idx = {scan_idx}, "
-              f"scans_num = {len(self._lio_ekf._lg_scan)}")
+              f"scans_num = {self._lio_ekf._scan_idx}")
 
         print(
             "total_imu: accel = ",
@@ -1070,10 +1049,11 @@ class LioEkfScans(client.ScanSource):
 
         min_ts = self._lio_ekf._lg_t[0]
         print(f"imu_ts: {min_ts}")
-        if self._lio_ekf._lg_scan:
-            scan_first_ts = scan_begin_ts(self._lio_ekf._lg_scan[0])
-            print(f"scan_ts: {scan_first_ts}")
-            min_ts = min(min_ts, scan_first_ts)
+        if self._lio_ekf._nav_scan_idxs:
+            nav_idx = self._lio_ekf._nav_scan_idxs[0]
+            scan_ts = scan_begin_ts(self._lio_ekf._navs[nav_idx].scan)
+            print(f"scan_ts: {scan_ts}")
+            min_ts = min(min_ts, scan_ts)
         print(f"min_ts res: {min_ts}")
 
 
@@ -1102,18 +1082,12 @@ class LioEkfScans(client.ScanSource):
 
         nav_t = [nav_t - min_ts for nav_t in self._lio_ekf._navs_t]
 
-        # dpos = []
-        # for dp in self._lio_ekf._lg_dsp:
-        #     if dpos:
-        #         dpos.append(dpos[-1] + dp[1])
-        #     else:
-        #         dpos.append(dp[1])
         dpos = [nav.pos for nav in self._lio_ekf._navs]
         dpos_x = [p[0] for p in dpos]
         dpos_y = [p[1] for p in dpos]
         dpos_z = [p[2] for p in dpos]
 
-        scan_t = [scan_begin_ts(ls) - min_ts for ls in self._lio_ekf._lg_scan]
+        scan_t = [scan_end_ts(self._lio_ekf._navs[si].scan) - min_ts for si in self._lio_ekf._nav_scan_idxs]
 
         # fig0, ax_main = plt.subplots(2, 1)
 
