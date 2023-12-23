@@ -6,7 +6,7 @@ import ouster.sdk.pose_util as pu
 
 import numpy as np
 
-INIT_POINT_CLOUD_SIZE = 1000000
+INIT_POINT_CLOUD_SIZE = 10000
 
 class PointCloud:
     """Helper to draw unstructured point cloud with PointViz"""
@@ -21,6 +21,7 @@ class PointCloud:
                  _init_size: int = INIT_POINT_CLOUD_SIZE):
         self._viz = point_viz
         self._pose = pose
+        self._point_size = point_size
 
         self._points = np.zeros((_init_size, 3), dtype=np.float32, order='F')
         self._keys = np.zeros(_init_size, dtype=np.float32)
@@ -36,7 +37,7 @@ class PointCloud:
         self._points_idx = 0
 
         self._cloud = Cloud(_init_size)
-        self._cloud.set_point_size(point_size)
+        self._cloud.set_point_size(self._point_size)
 
         self._enabled = False
         if enabled:
@@ -89,7 +90,16 @@ class PointCloud:
         n = points.shape[0]
         if n > self._points.shape[0]:
             print("NOT IMPLEMENTED Cloud grow")
-            exit(0)
+            new_size = int(points.shape[0] * 1.3)
+            new_points = np.zeros_like(self._points, shape=(new_size, 3))
+            new_points[:self._points.shape[0]] = self._points
+            self._points = new_points
+            new_keys = np.zeros_like(self._keys, shape=(new_size))
+            new_keys[:self._keys.shape[0]] = self._keys
+            self._keys = new_keys
+            new_mask = np.zeros_like(self._mask, shape=(new_size, 4))
+            new_mask[:self._mask.shape[0]] = self._mask
+            self._mask = new_mask
         self._points[:n] = points
         self._keys[:n] = self._active_key
         self._points[n:] = np.zeros([1, 3])
@@ -101,6 +111,14 @@ class PointCloud:
 
     def update(self) -> None:
         """Update label component viz states."""
+        if self._cloud.size < self._points.shape[0]:
+            print("CLOUD RECREATE for size = ", self._points.shape[0])
+            self._viz.remove(self._cloud)
+            del self._cloud
+            self._cloud = Cloud(self._points.shape[0])
+            self._cloud.set_point_size(self._point_size)
+            if self._enabled:
+                self._viz.add(self._cloud)
         self._cloud.set_pose(self._pose)
         self._cloud.set_xyz(self._points)
         self._cloud.set_key(self._keys[np.newaxis, ...])
