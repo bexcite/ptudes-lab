@@ -45,7 +45,7 @@ class KissICPWrapper:
 
     def register_frame(self, scan: LidarScan) -> PoseH:
         """Register scan with kiss icp"""
-        
+
         sel_flag = scan.field(ChanField.RANGE) != 0
         xyz = self._xyz_lut(scan)[sel_flag]
         timestamps = self._timestamps[sel_flag]
@@ -55,8 +55,12 @@ class KissICPWrapper:
         # TODO[pb]: This could be done differently ...
         ts = client.last_valid_column_ts(scan) * 1e-09
         self._poses_ts.append(ts)
-        
+
         return self.pose
+
+    def deskew(self, frame, timestamps) -> np.ndarray:
+        return self._kiss.compensator.deskew_scan(frame, self._kiss.poses,
+                                                  timestamps)
 
     @property
     def velocity(self) -> Vec3:
@@ -78,12 +82,16 @@ class KissICPWrapper:
     def poses(self) -> List[PoseH]:
         """Get all poses"""
         return self._kiss.poses
-    
+
     @property
     def poses_ts(self) -> List[float]:
         """Get all poses"""
         return self._poses_ts
     
+    @property
+    def local_map_points(self) -> np.ndarray:
+        return self._kiss.local_map.point_cloud()
+
     @property
     def _config(self) -> KISSConfig:
         """Get underlying kiss icp config"""

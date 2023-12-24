@@ -29,6 +29,9 @@ from dataclasses import dataclass
 RED_COLOR = np.array([1.0, 0.1, 0.1, 1.0])  # RGBA
 BLUE_COLOR = np.array([0.4, 0.4, 1.0, 1.0])  # RGBA
 YELLOW_COLOR = np.array([0.1, 1.0, 1.0, 1.0])  # RGBA
+GREY_COLOR = np.array([0.5, 0.5, 0.5, 1.0])  # RGBA
+GREY_COLOR1 = np.array([0.7, 0.7, 0.7, 1.0])  # RGBA
+WHITE_COLOR = np.array([1.0, 1.0, 1.0, 1.0])  # RGBA
 
 GRAV = 9.782940329221166
 DEG2RAD = np.pi / 180.0
@@ -62,6 +65,7 @@ class NavState:
     # NavStateLog for viz/debug parts
     scan: Optional[LidarScan] = None
 
+    xyz: Optional[np.ndarray] = None
     frame: Optional[np.ndarray] = None
     frame_ds: Optional[np.ndarray] = None
     source: Optional[np.ndarray] = None
@@ -72,6 +76,9 @@ class NavState:
     src_source_hl: Optional[np.ndarray] = None
     tgt: Optional[np.ndarray] = None
     tgt_hl: Optional[np.ndarray] = None
+
+    kiss_pose: Optional[np.ndarray] = None
+    kiss_map: Optional[np.ndarray] = None
 
     local_map: Optional[np.ndarray] = None
 
@@ -285,7 +292,7 @@ class LioEkf:
         self._imu_total = IMU()
         self._imu_total_cnt = 0
 
-        self._initialized = False
+        self._imu_initialized = False
 
         self._lg_t = []
         self._lg_acc = []
@@ -392,13 +399,13 @@ class LioEkf:
         self._imu_curr.lacc -= self._nav_curr.bias_acc
         self._imu_curr.avel -= self._nav_curr.bias_gyr
 
-        # accumulate total
+        # accumulate totals
         self._imu_total.lacc += self._imu_curr.lacc
         self._imu_total.avel += self._imu_curr.avel
         self._imu_total_cnt += 1
 
-        if not self._initialized:
-            self._initialized = True
+        if not self._imu_initialized:
+            self._imu_initialized = True
             return
 
         self._insMech()
@@ -485,7 +492,8 @@ class LioEkf:
         sel_flag = ls.field(ChanField.RANGE) != 0
         xyz = self._xyz_lut(ls)[sel_flag]
         timestamps = timestamps[sel_flag]
-        # print("ls.size = ", xyz.shape)
+        print("xyz.shape = ", xyz.shape)
+        print("xyz.flags = ", xyz.flags)
         # print("timestamps.size = ", timestamps.shape)
 
         # debug
@@ -493,9 +501,10 @@ class LioEkf:
         kiss_guess = True
 
         # deskew
-        frame = self.deskew_scan(xyz,
-                                 timestamps,
-                                 linear_prediction=self._booting)
+        if self._booting:
+            frame = self._kiss_icp.deskew(xyz, timestamps)
+        else:
+            frame = self.deskew_scan(xyz, timestamps)
 
         source, frame_downsample = self.voxelize(frame)
         print("source.shape = ", source.shape)
@@ -822,6 +831,7 @@ class LioEkf:
 
         store_nav = deepcopy(self._nav_curr)
         store_nav.scan = ls
+        store_nav.xyz = xyz
         store_nav.frame = frame
         store_nav.frame_ds = frame_downsample
         store_nav.source = source
@@ -832,6 +842,10 @@ class LioEkf:
         store_nav.tgt = tgt
         store_nav.tgt_hl = tgt_hl
         store_nav.local_map = self._local_map.point_cloud()
+
+        if self._booting:
+            store_nav.kiss_pose = self._kiss_icp.pose
+            store_nav.kiss_map = self._kiss_icp.local_map_points
 
 
         self._local_map.update(frame_downsample, self._nav_curr.pose_mat())
@@ -865,35 +879,35 @@ class LioEkf:
             return xyz
         scan_navs = self._get_scan_nav_idxs()
 
-        last_scan_nav = 0
+        last_nav = 0
         if len(scan_navs) == 0:
             if not (len(self._navs) > 8 and len(self._navs) < 15):
                 return xyz
         else:
-            last_scan_nav = scan_navs[-1]
+            last_nav = scan_navs[-1]
 
-        print("LAST_SCAN_NAV = ", last_scan_nav)
+        print("LAST_NAV = ", last_nav)
 
         if linear_prediction and len(scan_navs) < 2:
             return xyz
 
         to_pose = self._nav_curr.pose_mat()
-        if linear_prediction and self._booting:
-            to_pose = self._kiss_icp.pose
+        if linear_prediction:
+            to_pose = self._navs[last_nav].pose_mat(
+            ) @ self.linear_scan_prediction()
 
         deskew_frame = kiss_icp_pybind._deskew_scan(
             frame=kiss_icp_pybind._Vector3dVector(xyz),
             timestamps=timestamps,
-            start_pose=self._navs[last_scan_nav].pose_mat(),
+            start_pose=self._navs[last_nav].pose_mat(),
             finish_pose=to_pose,
         )
         return np.asarray(deskew_frame)
 
-    def get_kiss_prediction_model(self):
+    def linear_scan_prediction(self):
         scan_navs = self._get_scan_nav_idxs()
         if len(scan_navs) < 2:
             return np.eye(4)
-
         nav_pre = self._navs[scan_navs[-2]]
         nav_last = self._navs[scan_navs[-1]]
         return np.linalg.inv(nav_pre.pose_mat()) @ nav_last.pose_mat()
@@ -1222,6 +1236,9 @@ class LioEkfScans(client.ScanSource):
 
         @dataclass
         class CloudsStruct:
+            xyz: PointCloud
+            frame: PointCloud
+            frame_ds: PointCloud
             src_source: PointCloud
             src_source_hl: PointCloud
             src: PointCloud
@@ -1229,8 +1246,19 @@ class LioEkfScans(client.ScanSource):
             src_hl: PointCloud
             tgt_hl: PointCloud
             local_map: PointCloud
+            kiss_map: PointCloud
 
             def __init__(self, point_viz: viz.PointViz):
+                self.xyz = PointCloud(point_viz,
+                                      point_color=GREY_COLOR,
+                                      point_size=1)
+                self.frame = PointCloud(point_viz,
+                                        point_color=GREY_COLOR1,
+                                        point_size=1)
+                self.frame_ds = PointCloud(point_viz,
+                                           point_color=GREY_COLOR1,
+                                           point_size=2)
+
                 self.src_source = PointCloud(point_viz)
                 self.src_source_hl = PointCloud(point_viz,
                                                 point_color=YELLOW_COLOR,
@@ -1244,8 +1272,12 @@ class LioEkfScans(client.ScanSource):
                                          point_color=BLUE_COLOR,
                                          point_size=5)
                 self.local_map = PointCloud(point_viz)
+                self.kiss_map = PointCloud(point_viz, point_color=WHITE_COLOR)
 
             def toggle(self):
+                self.xyz.toggle()
+                self.frame.toggle()
+                self.frame_ds.toggle()
                 self.src_source.toggle()
                 self.src_source_hl.toggle()
                 self.src.toggle()
@@ -1253,8 +1285,12 @@ class LioEkfScans(client.ScanSource):
                 self.tgt.toggle()
                 self.tgt_hl.toggle()
                 self.local_map.toggle()
+                self.kiss_map.toggle()
 
             def disable(self):
+                self.xyz.disable()
+                self.frame.disable()
+                self.frame_ds.disable()
                 self.src_source.disable()
                 self.src_source_hl.disable()
                 self.src.disable()
@@ -1262,6 +1298,7 @@ class LioEkfScans(client.ScanSource):
                 self.tgt.disable()
                 self.tgt_hl.disable()
                 self.local_map.disable()
+                self.kiss_map.disable()
 
         clouds: Dict[int, CloudsStruct] = dict()
 
@@ -1272,6 +1309,12 @@ class LioEkfScans(client.ScanSource):
                 return
             if idx not in clouds:
                 clouds[idx] = CloudsStruct(point_viz)
+                clouds[idx].xyz.pose = nav.pose_mat()
+                clouds[idx].xyz.points = nav.xyz
+                clouds[idx].frame.pose = nav.pose_mat()
+                clouds[idx].frame.points = nav.frame
+                clouds[idx].frame_ds.pose = nav.pose_mat()
+                clouds[idx].frame_ds.points = nav.frame_ds
                 clouds[idx].src_source.pose = nav.pose_mat()
                 clouds[idx].src_source.points = nav.src_source
                 clouds[idx].src_source_hl.pose = nav.pose_mat()
@@ -1281,6 +1324,9 @@ class LioEkfScans(client.ScanSource):
                 clouds[idx].tgt.points = nav.tgt
                 clouds[idx].tgt_hl.points = nav.tgt_hl
                 clouds[idx].local_map.points = nav.local_map
+                clouds[idx].kiss_map.points = nav.kiss_map
+                clouds[idx].disable()
+            clouds[idx].kiss_map.enable()
             print("SET POINTS SIZE.src = ", clouds[idx].src.points.shape)
 
         def toggle_cloud_from_idx(idx: int, atr: Optional[str] = None):
@@ -1294,6 +1340,42 @@ class LioEkfScans(client.ScanSource):
                 print(f"toggle {atr}[{idx}], size = ", cloud.points.shape)
                 cloud.toggle()
 
+
+        nav_axis_imu: List[viz.AxisWithLabel] = []
+        nav_axis_scan: List[viz.AxisWithLabel] = []
+        nav_axis_kiss: List[viz.AxisWithLabel] = []
+
+        for idx, nav in enumerate(self._lio_ekf._navs):
+            # print(f"{idx}: ", nav.pos, ", att_h = ", log_rot_mat(nav.att_h))
+            pose_mat = nav.pose_mat()
+            # pose_mat[:3, 3] -= min_pos
+            axis_length = 0.5 if nav.scan is not None else 0.1
+            axis_label = f"{idx}" if nav.scan is not None else ""
+            if nav.scan:
+                nav_axis_scan += [
+                    viz.AxisWithLabel(point_viz,
+                                      pose=pose_mat,
+                                      length=axis_length,
+                                      label=axis_label)
+                ]
+                if nav.kiss_pose is not None:
+                    nav_axis_kiss += [
+                        viz.AxisWithLabel(point_viz,
+                                          pose=nav.kiss_pose,
+                                          length=axis_length)
+                    ]
+            else:
+                nav_axis_imu += [
+                    viz.AxisWithLabel(point_viz,
+                                      pose=pose_mat,
+                                      length=axis_length,
+                                      label=axis_label)
+                ]
+
+        def toggle_things(objs):
+            for o in objs:
+                if hasattr(o, "toggle"):
+                    o.toggle()
 
         target_idx = next_scan_based_nav(self._lio_ekf._navs, start_idx=0)
 
@@ -1327,25 +1409,35 @@ class LioEkfScans(client.ScanSource):
                 toggle_cloud_from_idx(target_idx, "tgt")
                 toggle_cloud_from_idx(target_idx, "tgt_hl")
                 point_viz.update()
+            elif key == ord('T'):
+                toggle_cloud_from_idx(target_idx, "xyz")
+                point_viz.update()
+            elif key == ord('Y'):
+                toggle_cloud_from_idx(target_idx, "frame")
+                point_viz.update()
+            elif key == ord('U'):
+                toggle_cloud_from_idx(target_idx, "frame_ds")
+                point_viz.update()
             elif key == ord('M'):
-                toggle_cloud_from_idx(target_idx, "local_map")
+                if mods == 0:
+                    toggle_cloud_from_idx(target_idx, "local_map")
+                elif mods == 2:
+                    toggle_cloud_from_idx(target_idx, "kiss_map")
+                point_viz.update()
+            elif key == ord('P'):
+                print(f"{mods = }")
+                if mods == 0:
+                    toggle_things(nav_axis_imu)
+                elif mods == 1:
+                    toggle_things(nav_axis_scan)
+                elif mods == 2:
+                    toggle_things(nav_axis_kiss)
                 point_viz.update()
             return True
 
         point_viz.push_key_handler(handle_keys)
 
-        # min_pos = np.zeros(3) if len(
-        #     self._lio_ekf._navs) < 123 else self._lio_ekf._navs[123].pos
-        # print("min_pos = ", min_pos)
-        for idx, nav in enumerate(self._lio_ekf._navs):
-            # print(f"{idx}: ", nav.pos, ", att_h = ", log_rot_mat(nav.att_h))
-            pose_mat = nav.pose_mat()
-            # pose_mat[:3, 3] -= min_pos
-            axis_length = 0.5 if nav.scan is not None else 0.1
-            axis_label = f"{idx}" if nav.scan is not None else ""
-            viz.AxisWithLabel(point_viz, pose=pose_mat,
-                              length=axis_length,
-                              label=axis_label)
+
 
 
         target_nav = self._lio_ekf._navs[target_idx]
