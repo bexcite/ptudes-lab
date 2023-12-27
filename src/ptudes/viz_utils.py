@@ -32,7 +32,7 @@ class PointCloud:
             self._mask_color = np.zeros(4)
 
         self._active_key = 0.7
-        
+
         # next idx for the new points to add
         self._points_idx = 0
 
@@ -89,7 +89,6 @@ class PointCloud:
         """Set points, and update internal states"""
         n = points.shape[0]
         if n > self._points.shape[0]:
-            print("NOT IMPLEMENTED Cloud grow")
             new_size = int(points.shape[0] * 1.3)
             new_points = np.zeros_like(self._points, shape=(new_size, 3))
             new_points[:self._points.shape[0]] = self._points
@@ -112,7 +111,6 @@ class PointCloud:
     def update(self) -> None:
         """Update label component viz states."""
         if self._cloud.size < self._points.shape[0]:
-            print("CLOUD RECREATE for size = ", self._points.shape[0])
             self._viz.remove(self._cloud)
             del self._cloud
             self._cloud = Cloud(self._points.shape[0])
