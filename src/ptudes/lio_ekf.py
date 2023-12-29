@@ -11,29 +11,27 @@ import ouster.client as client
 
 from ouster.sdk.pose_util import exp_rot_vec, log_rot_mat, _no_scipy_log_rot_mat
 
-from kiss_icp.config import KISSConfig
 from kiss_icp.config import load_config
 from kiss_icp.pybind import kiss_icp_pybind
 from kiss_icp.voxelization import voxel_down_sample
 from kiss_icp.mapping import get_voxel_hash_map
 from kiss_icp.threshold import get_threshold_estimator
 from kiss_icp.registration import register_frame
-from kiss_icp.kiss_icp import KissICP
 
 import matplotlib.pyplot as plt
 
 from ptudes.kiss import KissICPWrapper
+from ptudes.data import GRAV, IMU, NavState, set_blk, blk
+
+from ptudes.utils import read_newer_college_gt
+
+from ptudes.viz_utils import lio_ekf_graphs, lio_ekf_viz
+
+from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
+                              GREY_COLOR1, WHITE_COLOR)
 
 from dataclasses import dataclass
 
-RED_COLOR = np.array([1.0, 0.1, 0.1, 1.0])  # RGBA
-BLUE_COLOR = np.array([0.4, 0.4, 1.0, 1.0])  # RGBA
-YELLOW_COLOR = np.array([0.1, 1.0, 1.0, 1.0])  # RGBA
-GREY_COLOR = np.array([0.5, 0.5, 0.5, 1.0])  # RGBA
-GREY_COLOR1 = np.array([0.7, 0.7, 0.7, 1.0])  # RGBA
-WHITE_COLOR = np.array([1.0, 1.0, 1.0, 1.0])  # RGBA
-
-GRAV = 9.782940329221166
 DEG2RAD = np.pi / 180.0
 
 from .imu_test import imu_raw
@@ -52,57 +50,6 @@ def scan_mid_ts(ls: client.LidarScan) -> float:
 
 def centroid(points: np.ndarray) -> np.ndarray:
     return np.sum(points, axis=0) / points.shape[0]
-
-@dataclass
-class NavState:
-    pos: np.ndarray = np.zeros(3)    # Vec3
-    att_h: np.ndarray = np.eye(3)    # Mat3x3, SO(3)
-    vel: np.ndarray = np.zeros(3)    # Vec3
-
-    bias_gyr: np.ndarray = np.zeros(3)  # Vec3
-    bias_acc: np.ndarray = np.zeros(3) # Vec3
-
-    # NavStateLog for viz/debug parts
-    cov: Optional[np.ndarray] = None
-    scan: Optional[LidarScan] = None
-
-    xyz: Optional[np.ndarray] = None
-    frame: Optional[np.ndarray] = None
-    frame_ds: Optional[np.ndarray] = None
-    source: Optional[np.ndarray] = None
-
-    src: Optional[np.ndarray] = None
-    src_hl: Optional[np.ndarray] = None
-    src_source: Optional[np.ndarray] = None
-    src_source_hl: Optional[np.ndarray] = None
-    tgt: Optional[np.ndarray] = None
-    tgt_hl: Optional[np.ndarray] = None
-
-    kiss_pose: Optional[np.ndarray] = None
-    kiss_map: Optional[np.ndarray] = None
-
-    local_map: Optional[np.ndarray] = None
-
-    # gravity vector?
-
-    def pose_mat(self) -> np.ndarray:
-        pose = np.eye(4)
-        pose[:3, :3] = self.att_h
-        pose[:3, 3] = self.pos
-        return pose
-
-    def _formatted_str(self) -> str:
-        sb = " (S)" if self.scan else ""
-        s = (f"NavState{sb}:\n"
-             f"  pos: {self.pos}\n"
-             f"  vel: {self.vel}\n"
-             f"  att_v: {log_rot_mat(self.att_h)}\n"
-             f"  bg: {self.bias_gyr}\n"
-             f"  ba: {self.bias_acc}\n")
-        return s
-
-    def __repr__(self) -> str:
-        return self._formatted_str()
 
 
 @dataclass
@@ -125,40 +72,6 @@ class NavErrState:
 
     def __repr__(self) -> str:
         return self._formatted_str()
-
-
-@dataclass
-class IMU:
-    lacc: np.ndarray = np.zeros(3)
-    avel: np.ndarray = np.zeros(3)
-    ts: float = 0
-    dt: float = 0
-
-    @staticmethod
-    def from_packet(imu_packet: client.ImuPacket, dt: float = 0.01, _intr_rot: Optional[np.ndarray] = None) -> "IMU":
-        imu = IMU()
-        imu.ts = imu_packet.sys_ts / 10**9
-        imu.lacc = GRAV * imu_packet.accel
-        imu.avel = imu_packet.angular_vel
-        if _intr_rot is not None:
-            imu.lacc = _intr_rot @ imu.lacc
-            imu.avel = _intr_rot @ imu.avel
-        imu.dt = dt
-        return imu
-
-
-def set_blk(m: np.ndarray, row_id: int, col_id: int,
-            b: np.ndarray) -> np.ndarray:
-    br, bc = b.shape
-    m[row_id:row_id + br, col_id:col_id + bc] = b
-    return m
-
-def blk(m: np.ndarray, row_id: int, col_id: int,
-            nrows: int, ncols: Optional[int] = None) -> np.ndarray:
-    if ncols is None:
-        ncols = nrows
-    return m[row_id:row_id + nrows, col_id:col_id + ncols]
-
 
 def vee(vec: np.ndarray) -> np.ndarray:
     w = np.zeros((3, 3))
@@ -203,17 +116,21 @@ class LioEkf:
         self._initpos_std = np.diag([20.05, 20.05, 20.05])
         self._initvel_std = np.diag([5.05, 5.05, 5.05])
         self._initatt_std = DEG2RAD * np.diag([45.0, 45.0, 45.5])
+        # self._initbg_std = np.diag([1.0, 1.0, 1.0])
+        # self._initba_std = np.diag([5.0, 5.0, 5.0])
+        self._initbg_std = np.diag([1.5, 1.5, 1.5])
+        self._initba_std = np.diag([0.5, 0.5, 0.5])
 
         # super good (from IMU IAM-20680HT Datasheet)
-        # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
-        # self._gyr_arw = 1 * DEG2RAD  #  rad/s
-        # self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
-        # self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
-
         self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
-        self._gyr_arw = 10 * DEG2RAD  #  rad/s
-        self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(H)
-        self._gyr_bias_std = 0.01 * DEG2RAD  # rad/s / sqrt(H)
+        self._gyr_arw = 1 * DEG2RAD  #  rad/s
+        self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
+        self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
+
+        # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
+        # self._gyr_arw = 10 * DEG2RAD  #  rad/s
+        # self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(H)
+        # self._gyr_bias_std = 0.01 * DEG2RAD  # rad/s / sqrt(H)
 
         self._imu_corr_time = 3600  # s
 
@@ -227,10 +144,14 @@ class LioEkf:
                 np.square(self._initvel_std))
         set_blk(self._cov, self.PHI_ID, self.PHI_ID,
                 np.square(self._initatt_std))
+        # set_blk(self._cov, self.BG_ID, self.BG_ID,
+        #         np.square(5000 * self._gyr_bias_std * np.eye(3)))
+        # set_blk(self._cov, self.BA_ID, self.BA_ID,
+        #         np.square(5000 * self._acc_bias_std * np.eye(3)))
         set_blk(self._cov, self.BG_ID, self.BG_ID,
-                np.square(self._gyr_bias_std * np.eye(3)))
+                np.square(self._initbg_std * np.eye(3)))
         set_blk(self._cov, self.BA_ID, self.BA_ID,
-                np.square(self._acc_bias_std * np.eye(3)))
+                np.square(self._initba_std * np.eye(3)))
 
         self._cov_init = np.copy(self._cov)
 
@@ -242,8 +163,8 @@ class LioEkf:
                 corr_coef * np.square(self._acc_bias_std * np.eye(3)))
 
         self._cov_mnoise = np.zeros((6, 6))
-        set_blk(self._cov_mnoise, 0, 0, np.square(self._acc_vrw * np.eye(3)))
-        set_blk(self._cov_mnoise, 3, 3, np.square(self._gyr_arw * np.eye(3)))
+        set_blk(self._cov_mnoise, 0, 0, np.square(self._gyr_arw * np.eye(3)))
+        set_blk(self._cov_mnoise, 3, 3, np.square(self._acc_vrw * np.eye(3)))
 
         # point measurement covariance (Er)
         self._cov_scan_meas = np.square(self._scan_meas_std * np.eye(3))
@@ -441,13 +362,16 @@ class LioEkf:
 
         Ak = np.eye(self.STATE_RANK)
         set_blk(Ak, self.POS_ID, self.VEL_ID, sk * np.eye(3))
+
+        # print("OPT1 = \n", self._nav_prev.att_h @ vee(self._imu_curr.lacc))
+        # print("OPT2 = \n", vee(self._nav_prev.att_h @ self._imu_curr.lacc))
         set_blk(Ak, self.VEL_ID, self.PHI_ID,
                 sk * self._nav_prev.att_h @ vee(self._imu_curr.lacc))
         set_blk(Ak, self.VEL_ID, self.BA_ID, sk * self._nav_prev.att_h)
         set_blk(Ak, self.PHI_ID, self.BG_ID, -1.0 * sk * self._nav_prev.att_h)
 
         Bk = np.zeros((self.STATE_RANK, 6))
-        set_blk(Bk, self.VEL_ID, 0,
+        set_blk(Bk, self.VEL_ID, 3,
                 -sk * vee(self._nav_err.datt_v) @ self._nav_prev.att_h)
 
         self._cov = (Ak @ self._cov @ Ak.transpose() +
@@ -492,7 +416,9 @@ class LioEkf:
         # print(f"ts: {col_ts}, local_ts: {local_ts:.6f}, "
         #       f"processLidar: {lidar_packet = }")
 
-    def processLidarScan(self, ls: client.LidarScan) -> None:
+    def processLidarScan(self,
+                         ls: client.LidarScan,
+                         pose_gt: np.ndarray = None) -> None:
 
         # self._cov = np.copy(self._cov_init)
 
@@ -513,8 +439,8 @@ class LioEkf:
         sel_flag = ls.field(ChanField.RANGE) != 0
         xyz = self._xyz_lut(ls)[sel_flag]
         timestamps = timestamps[sel_flag]
-        print("xyz.shape = ", xyz.shape)
-        print("xyz.flags = ", xyz.flags)
+        # print("xyz.shape = ", xyz.shape)
+        # print("xyz.flags = ", xyz.flags)
         # print("timestamps.size = ", timestamps.shape)
 
         # debug
@@ -528,8 +454,8 @@ class LioEkf:
             frame = self.deskew_scan(xyz, timestamps)
 
         source, frame_downsample = self.voxelize(frame)
-        print("source.shape = ", source.shape)
-        print("frame_downsample.shape = ", frame_downsample.shape)
+        # print("source.shape = ", source.shape)
+        # print("frame_downsample.shape = ", frame_downsample.shape)
 
 
         # sigma = self.get_sigma_threshold()
@@ -552,7 +478,7 @@ class LioEkf:
         initial_guess = self._nav_curr.pose_mat()
         if kiss_guess:
             initial_guess = self.kiss_initial_guess()
-        print("initial_guess = \n", initial_guess)
+        # print("initial_guess = \n", initial_guess)
 
         src = np.empty((0, 3))
         src_hl = np.empty((0, 3))
@@ -587,18 +513,18 @@ class LioEkf:
             # print("h_dx[10] = ", h_dx[:10])
 
             # np.set_printoptions(precision=3, linewidth=180)
-            print("PREDICTION COV:::::::::::::::::::::\n", self._cov)
+            # print("PREDICTION COV:::::::::::::::::::::\n", self._cov)
 
-            print("_local_map.size = ", self._local_map.point_cloud().shape)
-            print("_local_map_empty = ", self._local_map.empty())
+            # print("_local_map.size = ", self._local_map.point_cloud().shape)
+            # print("_local_map_empty = ", self._local_map.empty())
 
             src, tgt = self._local_map.get_correspondences(h_dx, 3 * sigma)
-            print("src = ", src.shape)
-            print("tgt = ", tgt.shape)
+            # print("src = ", src.shape)
+            # print("tgt = ", tgt.shape)
 
             src_icp, tgt_icp = self._local_map.get_correspondences(h_dx_icp, 3 * sigma)
-            print("src_icp = ", src_icp.shape)
-            print("tgt_icp = ", tgt_icp.shape)
+            # print("src_icp = ", src_icp.shape)
+            # print("tgt_icp = ", tgt_icp.shape)
 
             # HACK: recover original coords
             src_source = src - tk - self._nav_err.dpos
@@ -615,9 +541,9 @@ class LioEkf:
             src_p = (
                 np.matmul(dR @ Rk, src_source_icp.transpose()).transpose() +
                 tk + self._nav_err.dpos)
-            print("centroid src_p = ", centroid(src_p))
-            print("centroid tgt_p = ", centroid(tgt_icp))
-            print("centroid src - tgt p = ", centroid(src_p) - centroid(tgt_icp))
+            # print("centroid src_p = ", centroid(src_p))
+            # print("centroid tgt_p = ", centroid(tgt_icp))
+            # print("centroid src - tgt p = ", centroid(src_p) - centroid(tgt_icp))
             src = src_p
             src_source = src_source_icp
             tgt = tgt_icp
@@ -631,12 +557,12 @@ class LioEkf:
 
             resid = src - tgt
 
-            print("centroid src = ", centroid(src))
-            print("centroid tgt = ", centroid(tgt))
-            print("centroid src  - tgt = ", centroid(src) - centroid(tgt))
+            # print("centroid src = ", centroid(src))
+            # print("centroid tgt = ", centroid(tgt))
+            # print("centroid src  - tgt = ", centroid(src) - centroid(tgt))
 
             # self._cov_scan_meas_inv = np.eye(3)
-            print("Ep_inv = ", self._cov_scan_meas_inv)
+            # print("Ep_inv = ", self._cov_scan_meas_inv)
 
 
             # rand_idx = np.random.randint(0, src.shape[0], 10) if src.shape[0] > 0 else []
@@ -685,24 +611,33 @@ class LioEkf:
                     # print("sum_res = \n", sum_res)
 
             else:
-                print("KISS_ALL_POSES = ", self._kiss_icp.poses)
-                scan_navs = [self._navs[sn] for sn in self._get_scan_nav_idxs()]
+                # print("KISS_ALL_POSES = ", self._kiss_icp.poses)
+                # scan_navs = [self._navs[sn] for sn in self._get_scan_nav_idxs()]
 
-                print("ALL_NAVS_POSES = ", scan_navs)
+                # print("ALL_NAVS_POSES = ", scan_navs)
 
                 pos = self._kiss_icp.pose[:3, 3]
                 rot = self._kiss_icp.pose[:3, :3]
+
+                if pose_gt is not None:
+                    pos = pose_gt[:3, 3]
+                    rot = pose_gt[:3, :3]
+
                 # add to measurement sets
                 Jp = np.zeros((6, self.STATE_RANK))
                 set_blk(Jp, 0, self.POS_ID, 1.0 * np.eye(3))
                 set_blk(Jp, 3, self.PHI_ID, 1.0 * np.eye(3))
                 # set_blk(Jp, 3, self.PHI_ID, rot.transpose())
-                Epos_inv = np.linalg.inv(np.square(0.05 * np.eye(3)))
-                Eatt_inv = np.linalg.inv(np.square(0.1 * np.eye(3)))
-                Epa = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
+                Epos = np.square(0.05 * np.eye(3))
+                Eatt = np.square(0.1 * np.eye(3))
+                Epos_inv = np.linalg.inv(Epos)
+                Eatt_inv = np.linalg.inv(Eatt)
+                Epa_inv = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
+                Epa = scipy.linalg.block_diag(Epos, Eatt)
                 # Epa = scipy.linalg.block_diag(Epos_inv)
-                print("Epa = ", Epa)
-                sum_Ji += Jp.transpose() @ Epa @ Jp
+                # print("Epa = \n", Epa)
+                # print("Epa_inv = \n", Epa_inv)
+                sum_Ji += Jp.transpose() @ Epa_inv @ Jp
                 resid_pa = np.zeros(6)
                 resid_pa[:3] = pos - self._nav_curr.pos - self._nav_err.dpos
                 Rk_inv = np.linalg.inv(Rk)
@@ -713,9 +648,18 @@ class LioEkf:
                 # print("rotv = ", log_rot_mat(dR @ Rk @ rot.transpose()))
                 # resid_pa[3:] = log_rot_mat(dR @ Rk @ rot.transpose())
                 print("resid_pa = ", resid_pa)
-                sum_res += Jp.transpose() @ Epa @ resid_pa
-                print("sum_Ji + Pos = \n", sum_Ji)
-                print("sum_res + Pos = \n", sum_res)
+                sum_res += Jp.transpose() @ Epa_inv @ resid_pa
+                # print("sum_Ji + Pos = \n", sum_Ji)
+                # print("sum_res + Pos = \n", sum_res)
+
+                # S = Jp @ self._cov @ Jp.transpose() + Epa
+                # K = self._cov @ Jp.transpose() @ np.linalg.inv(S)
+                # print("S = \n", S)
+                # print("K = \n", K)
+                # delta_x = K @ resid_pa
+
+
+
 
                 # if len(self._kiss_icp.poses) >= 2:
                 #     # last_pose = self._nav_curr.pose_mat()
@@ -741,8 +685,8 @@ class LioEkf:
                 #     print("sum_Ji + V = \n", sum_Ji)
                 #     print("sum_res + V = \n", sum_res)
 
-            print("sum_Ji = \n", sum_Ji)
-            print("sum_res = \n", sum_res)
+            # print("sum_Ji = \n", sum_Ji)
+            # print("sum_res = \n", sum_res)
 
             # HACK update velocity
             # scan_navs = self._get_scan_nav_idxs()
@@ -776,16 +720,17 @@ class LioEkf:
             # self._cov = np.copy(self._cov_init)
 
             cov_inv = np.linalg.inv(self._cov)
-            print("cov_inv = \n", cov_inv)
+            # print("cov_inv = \n", cov_inv)
             H_plus_cov = np.linalg.inv(sum_Ji + cov_inv)
-            print("H_plus_cov = \n", H_plus_cov)
+            # print("H_plus_cov = \n", H_plus_cov)
             # K_gain = H_plus_cov @ Ji.transpose() @ self._cov_scan_meas_inv
             # print("K_gain = \n", K_gain)
+            # print("delta_x0 = \n", delta_x)
             delta_x = H_plus_cov @ sum_res
 
-            print("delta_x = ", delta_x)
+            # print("delta_x = \n", delta_x)
 
-            print("H_plus_cov @ sum_Ji = \n", H_plus_cov @ sum_Ji)
+            # print("H_plus_cov @ sum_Ji = \n", H_plus_cov @ sum_Ji)
 
             # apply correction error-state
             self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
@@ -801,7 +746,7 @@ class LioEkf:
 
             print(f"_nav_err FINAL [iter:{it}] = \n", self._nav_err)
 
-            print("_nav_curr FINAL (ICP) = ", new_icp_pose)
+            # print("_nav_curr FINAL (ICP) = ", new_icp_pose)
 
             # self._nav_curr.pos = new_icp_pose[:3, 3]
             # self._nav_curr.att_h = new_icp_pose[:3, :3]
@@ -873,8 +818,12 @@ class LioEkf:
         store_nav.local_map = self._local_map.point_cloud()
 
         if self._booting:
-            store_nav.kiss_pose = self._kiss_icp.pose
-            store_nav.kiss_map = self._kiss_icp.local_map_points
+            if pose_gt is not None:
+                store_nav.kiss_pose = pose_gt
+                store_nav.kiss_map = np.empty((0,3))
+            else:
+                store_nav.kiss_pose = self._kiss_icp.pose
+                store_nav.kiss_map = self._kiss_icp.local_map_points
 
 
         self._local_map.update(frame_downsample, self._nav_curr.pose_mat())
@@ -1022,6 +971,22 @@ class LioEkfScans(client.ScanSource):
         print("start_scan = ", self._start_scan)
         print("end_scan = ", self._end_scan)
 
+        bag_file = "/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/2021-07-01-10-37-38-quad-easy.bag"
+        from ptudes.bag import IMUBagSource
+        imu_source = IMUBagSource(bag_file, imu_topic="/alphasense_driver_ros/imu")
+        gts = read_newer_college_gt("/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/ground_truth/gt-nc-quad-easy.csv")
+        gt_ts = gts[0][0]
+        gt_pose = gts[0][1]
+        # for idx, im in enumerate(imus):
+        #     print(f"dt[{idx}] = ", gts[0][0] - im.ts)
+        pose_idx = 1
+        imu_it = iter(imu_source)
+        pose_corr = gts[pose_idx][1]
+        pose_ts = gts[pose_idx][0]
+
+        # print("dts = ", imus[0].ts, gts[0][0], gts[0][0] - imus[0].ts)
+        print("gt_pose = ", gt_pose)
+
         while True:
             try:
                 packet = next(it)
@@ -1070,8 +1035,18 @@ class LioEkfScans(client.ScanSource):
                     # imu = IMU(acc, gyr, imu_idx * 0.001)
 
                     # self._lio_ekf.processImu(imu)
-
                     self._lio_ekf.processImuPacket(packet)
+
+                    # imu = next(imu_it)
+                    # self._lio_ekf.processImu(imu)
+
+                    # if imu.ts > pose_ts:
+                    #     print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
+                    #     pose_idx += 1
+                    #     pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
+                    #     pose_ts = gts[pose_idx][0]
+                    #     print("pose_corr = \n", pose_corr)
+                    #     self._lio_ekf.processLidarScan(ls_write, pose_gt=pose_corr)
 
                     print("NAV_CURR (Im) = ", self._lio_ekf._nav_curr)
 
@@ -1084,475 +1059,13 @@ class LioEkfScans(client.ScanSource):
               f"scan_idx = {scan_idx}, "
               f"scans_num = {self._lio_ekf._scan_idx}")
 
-        print(
-            "total_imu: accel = ",
-            self._lio_ekf._imu_total.lacc / self._lio_ekf._imu_total_cnt +
-            self._lio_ekf._g_fn)
-        print("total_imu: avel  = ",
-              self._lio_ekf._imu_total.avel / self._lio_ekf._imu_total_cnt)
-        print(f"total_cnt = ", self._lio_ekf._imu_total_cnt)
-
-
-        min_ts = self._lio_ekf._lg_t[0]
-        print(f"imu_ts: {min_ts}")
-        if self._lio_ekf._nav_scan_idxs:
-            nav_idx = self._lio_ekf._nav_scan_idxs[0]
-            scan_ts = scan_begin_ts(self._lio_ekf._navs[nav_idx].scan)
-            print(f"scan_ts: {scan_ts}")
-            min_ts = min(min_ts, scan_ts)
-        print(f"min_ts res: {min_ts}")
-
-
-        # show graphs
-        # print(f"lg_t = {self._lio_ekf._lg_t}")
-        # print(f"lg_accel = {self._lio_ekf._lg_acc}")
-
-        # plt.cla()
-
-        t = [t - min_ts for t in self._lio_ekf._lg_t]
-        acc_x = [a[0] for a in self._lio_ekf._lg_acc]
-        acc_y = [a[1] for a in self._lio_ekf._lg_acc]
-        acc_z = [a[2] for a in self._lio_ekf._lg_acc]
-
-        gyr_x = [a[0] for a in self._lio_ekf._lg_gyr]
-        gyr_y = [a[1] for a in self._lio_ekf._lg_gyr]
-        gyr_z = [a[2] for a in self._lio_ekf._lg_gyr]
-
-        ba_x = [nav.bias_acc[0] for nav in self._lio_ekf._navs]
-        ba_y = [nav.bias_acc[1] for nav in self._lio_ekf._navs]
-        ba_z = [nav.bias_acc[2] for nav in self._lio_ekf._navs]
-
-        bg_x = [nav.bias_gyr[0] for nav in self._lio_ekf._navs]
-        bg_y = [nav.bias_gyr[1] for nav in self._lio_ekf._navs]
-        bg_z = [nav.bias_gyr[2] for nav in self._lio_ekf._navs]
-
-        nav_t = [nav_t - min_ts for nav_t in self._lio_ekf._navs_t]
-
-        dpos = [nav.pos for nav in self._lio_ekf._navs]
-        dpos_x = [p[0] for p in dpos]
-        dpos_y = [p[1] for p in dpos]
-        dpos_z = [p[2] for p in dpos]
-
-        scan_t = [scan_end_ts(self._lio_ekf._navs[si].scan) - min_ts for si in self._lio_ekf._nav_scan_idxs]
-
-        # fig0, ax_main = plt.subplots(2, 1)
-
-        # Create the plot
-        fig = plt.figure()
-        # fig, ax_all = plt.subplots(6, 2, sharex=True, sharey=True)
-        ax = [
-            plt.subplot(6, 2, 1),
-            plt.subplot(6, 2, 3),
-            plt.subplot(6, 2, 5),
-            plt.subplot(6, 2, 7),
-            plt.subplot(6, 2, 9),
-            plt.subplot(6, 2, 11)
-        ]
-        for a in ax[1:]:
-            a.sharex(ax[0])
-        for a in ax[1:3]:
-            a.sharey(ax[0])
-        for a in ax[4:]:
-            a.sharey(ax[3])
-        for a in ax[:-1]:
-            plt.setp(a.get_xticklines(), visible=False)
-            plt.setp(a.get_xticklabels(), visible=False)
-        for a in ax:
-            a.grid(True)
-
-        # ax = plt.figure().add_subplot()  # projection='3d'
-        # ax.plot(pos_x, pos_y)  # , pos_z
-        # ax.set_xlabel('X')
-        # ax.set_ylabel('Y')
-
-        # ax.set_zlabel('Z')
-        plt.gcf().canvas.mpl_connect(
-            'key_release_event',
-            lambda event: [exit(0) if event.key == 'escape' else None])
-
-        i = 0
-        ax[i].plot(t, acc_x)
-        ax[i].plot(nav_t, ba_x)
-        ax[i].set_ylabel('acc_X')
-        ax[i + 1].plot(t, acc_y)
-        ax[i + 1].plot(nav_t, ba_y)
-        ax[i + 1].set_ylabel('acc_Y')
-        ax[i + 2].plot(t, acc_z)
-        ax[i + 2].plot(nav_t, ba_z)
-        ax[i + 2].set_ylabel('acc_Z')
-        # ax[i + 2].set_xlabel('t')
-
-        # plt.plot(t, acc_x, "r", label="acc_x")
-        # plt.grid(True)
-        # plt.show()
-
-        # input()
-        # Create the plot
-        # for a in ax.flat:
-        #     a.cla()
-
-        i = 3
-        ax[i].plot(t, gyr_x)
-        ax[i].plot(nav_t, bg_x)
-        ax[i].set_ylabel('gyr_X')
-        ax[i + 1].plot(t, gyr_y)
-        ax[i + 1].plot(nav_t, bg_y)
-        ax[i + 1].set_ylabel('gyr_Y')
-        ax[i + 2].plot(t, gyr_z)
-        ax[i + 2].plot(nav_t, bg_z)
-        ax[i + 2].set_ylabel('gyr_Z')
-        ax[i + 2].set_xlabel('t')
-
-        # i = 6
-        axX = fig.add_subplot(6, 2, (2, 4))
-        axX.plot(nav_t, dpos_x)
-        axX.grid(True)
-        axY = fig.add_subplot(6, 2, (6, 8))
-        axY.plot(nav_t, dpos_y)
-        axY.grid(True)
-        axZ = fig.add_subplot(6, 2, (10, 12))
-        axZ.plot(nav_t, dpos_z)
-        axZ.grid(True)
-        axZ.set_xlabel('t')
-
-        for a in ax + [axX, axY, axZ]:
-            a.plot(scan_t, np.zeros_like(scan_t), '8r')
-
-        # plt.autoscale(tight=True)
-
-        # plt.tight_layout()
-
-        '''
-        ax = plt.figure().add_subplot()  # projection='3d'
-        plt.axis("equal")
-        # ax.plot(pos_x, pos_y)  # , pos_z
-        ax.plot(dpos_x, dpos_y)
-        ax.grid(True)
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        # ax.set_zlabel('Z')
-        '''
-
-        if self._plotting is None:
-            return
-
-        mplot = True
-
-        # plt.plot(t, acc_x, "r", label="acc_x")
-        # plt.grid(True)
         if self._plotting == "graphs":
-            plt.show()
-            return
-
-        if self._plotting != "point_viz":
+            lio_ekf_graphs(self._lio_ekf)
+        elif self._plotting == "point_viz":
+            lio_ekf_viz(self._lio_ekf)
+        else:
             print(f"WARNING: plotting param '{self._plotting}' doesn't "
                   f"supported")
-            return
-
-
-        import ouster.viz as viz
-        from ptudes.utils import (make_point_viz, spin)
-        from ptudes.viz_utils import PointCloud
-        point_viz = make_point_viz(f"Traj: poses = {len(self._lio_ekf._navs)}",
-                                   show_origin=False)
-
-        def next_scan_based_nav(navs: List[NavState],
-                                start_idx: int = 0) -> int:
-            ln = len(navs)
-            start_idx = (start_idx + ln) % ln
-            curr_idx = start_idx
-            while navs[curr_idx].scan is None:
-                curr_idx = (curr_idx + 1) % ln
-                if curr_idx == start_idx:
-                    break
-            return curr_idx
-
-        @dataclass
-        class CloudsStruct:
-            xyz: PointCloud
-            frame: PointCloud
-            frame_ds: PointCloud
-            src_source: PointCloud
-            src_source_hl: PointCloud
-            src: PointCloud
-            tgt: PointCloud
-            src_hl: PointCloud
-            tgt_hl: PointCloud
-            local_map: PointCloud
-            kiss_map: PointCloud
-
-            def __init__(self, point_viz: viz.PointViz):
-                self.xyz = PointCloud(point_viz,
-                                      point_color=GREY_COLOR,
-                                      point_size=1)
-                self.frame = PointCloud(point_viz,
-                                        point_color=GREY_COLOR1,
-                                        point_size=1)
-                self.frame_ds = PointCloud(point_viz,
-                                           point_color=GREY_COLOR1,
-                                           point_size=2)
-
-                self.src_source = PointCloud(point_viz)
-                self.src_source_hl = PointCloud(point_viz,
-                                                point_color=YELLOW_COLOR,
-                                                point_size=5)
-                self.src = PointCloud(point_viz)
-                self.src_hl = PointCloud(point_viz,
-                                         point_color=RED_COLOR,
-                                         point_size=5)
-                self.tgt = PointCloud(point_viz)
-                self.tgt_hl = PointCloud(point_viz,
-                                         point_color=BLUE_COLOR,
-                                         point_size=5)
-                self.local_map = PointCloud(point_viz)
-                self.kiss_map = PointCloud(point_viz, point_color=WHITE_COLOR)
-
-            def toggle(self):
-                self.xyz.toggle()
-                self.frame.toggle()
-                self.frame_ds.toggle()
-                self.src_source.toggle()
-                self.src_source_hl.toggle()
-                self.src.toggle()
-                self.src_hl.toggle()
-                self.tgt.toggle()
-                self.tgt_hl.toggle()
-                self.local_map.toggle()
-                self.kiss_map.toggle()
-
-            def disable(self):
-                self.xyz.disable()
-                self.frame.disable()
-                self.frame_ds.disable()
-                self.src_source.disable()
-                self.src_source_hl.disable()
-                self.src.disable()
-                self.src_hl.disable()
-                self.tgt.disable()
-                self.tgt_hl.disable()
-                self.local_map.disable()
-                self.kiss_map.disable()
-
-        clouds: Dict[int, CloudsStruct] = dict()
-
-        sample_cloud = PointCloud(point_viz,
-                                  point_size=1,
-                                  point_color=YELLOW_COLOR)
-
-        def set_cloud_from_idx(idx: int):
-            nonlocal clouds
-            nav = self._lio_ekf._navs[idx]
-            if nav.scan is None:
-                return
-            if idx not in clouds:
-                clouds[idx] = CloudsStruct(point_viz)
-                clouds[idx].xyz.pose = nav.pose_mat()
-                clouds[idx].xyz.points = nav.xyz
-                clouds[idx].frame.pose = nav.pose_mat()
-                clouds[idx].frame.points = nav.frame
-                clouds[idx].frame_ds.pose = nav.pose_mat()
-                clouds[idx].frame_ds.points = nav.frame_ds
-                clouds[idx].src_source.pose = nav.pose_mat()
-                clouds[idx].src_source.points = nav.src_source
-                clouds[idx].src_source_hl.pose = nav.pose_mat()
-                clouds[idx].src_source_hl.points = nav.src_source_hl
-                clouds[idx].src.points = nav.src
-                clouds[idx].src_hl.points = nav.src_hl
-                clouds[idx].tgt.points = nav.tgt
-                clouds[idx].tgt_hl.points = nav.tgt_hl
-                clouds[idx].local_map.points = nav.local_map
-                clouds[idx].kiss_map.points = nav.kiss_map
-                clouds[idx].disable()
-            clouds[idx].kiss_map.enable()
-            # print("SET POINTS SIZE.src = ", clouds[idx].src.points.shape)
-
-        def toggle_cloud_from_idx(idx: int, atr: Optional[str] = None):
-            nonlocal clouds
-            if idx not in clouds:
-                return
-            if atr is None or not hasattr(clouds[idx], atr):
-                clouds[idx].toggle()
-            elif hasattr(clouds[idx], atr):
-                cloud = getattr(clouds[idx], atr)
-                print(f"toggle {atr}[{idx}], size = ", cloud.points.shape)
-                cloud.toggle()
-
-
-        nav_axis_imu: List[viz.AxisWithLabel] = []
-        nav_axis_scan: List[viz.AxisWithLabel] = []
-        nav_axis_kiss: List[viz.AxisWithLabel] = []
-
-        sample_axis: List[viz.AxisWithLabel] = []
-        for i in range(100):
-            sample_axis += [
-                viz.AxisWithLabel(point_viz,
-                                  length=0.2,
-                                  thickness=1,
-                                  enabled=True)
-            ]
-
-        for idx, nav in enumerate(self._lio_ekf._navs):
-            # print(f"{idx}: ", nav.pos, ", att_h = ", log_rot_mat(nav.att_h))
-            pose_mat = nav.pose_mat()
-            # pose_mat[:3, 3] -= min_pos
-            axis_length = 0.5 if nav.scan is not None else 0.1
-            axis_label = f"{idx}" if nav.scan is not None else ""
-            if nav.scan:
-                nav_axis_scan += [
-                    viz.AxisWithLabel(point_viz,
-                                      pose=pose_mat,
-                                      length=axis_length,
-                                      label=axis_label)
-                ]
-                if nav.kiss_pose is not None:
-                    nav_axis_kiss += [
-                        viz.AxisWithLabel(point_viz,
-                                          pose=nav.kiss_pose,
-                                          length=axis_length)
-                    ]
-            else:
-                nav_axis_imu += [
-                    viz.AxisWithLabel(point_viz,
-                                      pose=pose_mat,
-                                      length=axis_length,
-                                      label=axis_label)
-                ]
-
-        def toggle_things(objs):
-            for o in objs:
-                if hasattr(o, "toggle"):
-                    o.toggle()
-
-        def show_pos_att_uncertainty(nav, cov):
-            # print("cov = \n", cov)
-            # print("mu = \n", nav)
-
-            # print("mu_prev = \n", self._lio_ekf._nav_prev)
-
-            pos_cov = cov[:3, :3]
-            print("pos_cov = ", pos_cov)
-            pos_m = nav.pos
-            points = np.random.multivariate_normal(pos_m, pos_cov, size=2000)
-
-            # print("r = ", r)
-            sample_cloud.points = points
-
-            rot_cov = blk(cov, self._lio_ekf.PHI_ID, self._lio_ekf.PHI_ID, 3)
-            # print("rot_cov = ", rot_cov)
-
-            es = np.random.multivariate_normal(mean=np.zeros(3),
-                                               cov=rot_cov,
-                                               size=len(sample_axis))
-            # print("es = ", es[:10])
-            # es_rot = []
-            # ax_poses = []
-            for idx, e in enumerate(es):
-                ax_pose = np.eye(4)
-                ax_pose[:3, :3] = exp_rot_vec(e) @ nav.att_h
-                ax_pose[:3, 3] = nav.pos
-                # ax_pose[:3, 3] = 0
-                sample_axis[idx].pose = ax_pose
-                # print(f"sample_axis[{idx}].pose = ", sample_axis[idx].pose)
-                sample_axis[idx].enable()
-
-        target_idx = next_scan_based_nav(self._lio_ekf._navs, start_idx=0)
-
-        set_cloud_from_idx(target_idx)
-
-        def handle_keys(ctx, key, mods) -> bool:
-            nonlocal target_idx, sample_axis
-            if key == 32:
-                if target_idx in clouds:
-                    clouds[target_idx].disable()
-                target_idx = next_scan_based_nav(self._lio_ekf._navs,
-                                                 start_idx=target_idx + 1)
-                target_nav = self._lio_ekf._navs[target_idx]
-                print(f"TNAV[{target_idx}]: ", target_nav)
-                # point_viz.camera.set_target(
-                #     np.linalg.inv(target_nav.pose_mat()))
-                point_viz.camera.set_target(
-                    np.linalg.inv(target_nav.kiss_pose))
-                set_cloud_from_idx(target_idx)
-                pred_nav = self._lio_ekf._navs_pred[target_idx]
-                show_pos_att_uncertainty(pred_nav, pred_nav.cov)
-                point_viz.update()
-            elif key == ord('V'):
-                toggle_cloud_from_idx(target_idx)
-                point_viz.update()
-            elif key == ord('G'):
-                toggle_cloud_from_idx(target_idx, "src_source")
-                toggle_cloud_from_idx(target_idx, "src_source_hl")
-                point_viz.update()
-            elif key == ord('H'):
-                toggle_cloud_from_idx(target_idx, "src")
-                toggle_cloud_from_idx(target_idx, "src_hl")
-                point_viz.update()
-            elif key == ord('J'):
-                toggle_cloud_from_idx(target_idx, "tgt")
-                toggle_cloud_from_idx(target_idx, "tgt_hl")
-                point_viz.update()
-            elif key == ord('T'):
-                toggle_cloud_from_idx(target_idx, "xyz")
-                point_viz.update()
-            elif key == ord('Y'):
-                toggle_cloud_from_idx(target_idx, "frame")
-                point_viz.update()
-            elif key == ord('U'):
-                toggle_cloud_from_idx(target_idx, "frame_ds")
-                point_viz.update()
-            elif key == ord('M'):
-                if mods == 0:
-                    toggle_cloud_from_idx(target_idx, "local_map")
-                elif mods == 2:
-                    toggle_cloud_from_idx(target_idx, "kiss_map")
-                point_viz.update()
-            elif key == ord('P'):
-                print(f"{mods = }")
-                if mods == 0:
-                    toggle_things(nav_axis_imu)
-                elif mods == 1:
-                    toggle_things(nav_axis_scan)
-                elif mods == 2:
-                    toggle_things(nav_axis_kiss)
-                point_viz.update()
-            elif key == 91:  # "{"
-                # sample points from distribution
-                # marginalize on pos (and eevrything at mean)
-                # after prediction (pre update from lidar scan)
-                pred_nav = self._lio_ekf._navs_pred[target_idx]
-                # for idx, pn in enumerate(self._lio_ekf._navs):
-                #     print(f"_navs[{idx}] = ", pn)
-                # for idx, pn in enumerate(self._lio_ekf._navs_pred):
-                #     print(f"navs_pred[{idx}] = ", pn)
-                assert len(self._lio_ekf._navs) == len(self._lio_ekf._navs_pred)
-                print(f"pred_nav[{target_idx}] = ", pred_nav)
-                show_pos_att_uncertainty(pred_nav, pred_nav.cov)
-                print("nav_scan_idxs = ", self._lio_ekf._nav_scan_idxs)
-                print("target_idx = ", target_idx)
-                point_viz.update()
-                #
-            elif key == 93:  # "}"
-                # after update
-                upd_nav = self._lio_ekf._navs[target_idx]
-                print(f"upd_nav[{target_idx}] = ", upd_nav)
-                show_pos_att_uncertainty(upd_nav, upd_nav.cov)
-                point_viz.update()
-            else:
-                # pass
-                print("key = ", key)
-            return True
-
-        point_viz.push_key_handler(handle_keys)
-
-
-
-
-        target_nav = self._lio_ekf._navs[target_idx]
-        point_viz.camera.set_target(np.linalg.inv(target_nav.pose_mat()))
-
-        point_viz.update()
-        point_viz.run()
-
 
 
 

@@ -1,4 +1,4 @@
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Tuple
 
 import os
 import glob
@@ -13,7 +13,9 @@ import ouster.pcap as pcap
 from ouster.viz import (PointViz, ScansAccumulator, add_default_controls)
 import ouster.sdk.pose_util as pu
 
-from ptudes.bag import OusterRawBagSource
+from scipy.spatial.transform import Rotation
+
+from ptudes.bag import OusterRawBagSource, IMUBagSource
 
 def spin(pviz: PointViz,
          on_update: Callable[[PointViz, float], None],
@@ -164,3 +166,16 @@ def read_packet_source(
         bags_paths = sorted(
             [Path(p) for p in glob.glob(str(Path(file) / "*.bag"))])
         return OusterRawBagSource(bags_paths, meta)
+
+
+def read_newer_college_gt(data_path: str) -> List[Tuple[float, np.ndarray]]:
+    """Read ground truth poses for Newer College dataset"""
+    gt_data = np.loadtxt(data_path, delimiter=",")
+    ts = gt_data[:, 0] + gt_data[:, 1] * 1e-9
+
+    pos = np.tile(np.eye(4), reps=(gt_data.shape[0], 1, 1))
+    pos[:, :3, 3] = gt_data[:, 2:5]
+
+    rots = Rotation.from_quat(gt_data[:, 5:9]).as_matrix()
+    pos[:, :3, :3] = rots
+    return [(t, p) for t, p in zip(ts[:], pos[:])]

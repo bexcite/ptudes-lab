@@ -1,9 +1,13 @@
-from typing import List, Union, Iterator
+from typing import Optional, List, Union, Iterator
+
+import numpy as np
 
 from pathlib import Path
 
 import time
 from rosbags.highlevel import AnyReader
+
+from ptudes.data import IMU
 
 import ouster.client as client
 
@@ -89,3 +93,51 @@ class OusterRawBagSource(client.PacketSource):
 
     def close(self) -> None:
         self._bag_reader.close()
+
+
+class IMUBagSource:
+    """Read imu msgs from ROS bags"""
+
+    def __init__(self, data_path: Union[str, list],
+                 imu_topic: Optional[str] = None):
+
+        if isinstance(data_path, list):
+            data = [Path(p) for p in data_path]
+        else:
+            data = [Path(data_path)]
+
+        self._bag_reader = AnyReader(data)
+        self._bag_reader.open()
+
+        self._conns = []
+
+        imu_conns = [
+            c for c in self._bag_reader.connections
+            if c.msgtype == "sensor_msgs/msg/Imu"
+        ]
+        assert len(imu_conns), "Expect any topic with msgtype: " \
+            "sensor_msgs/msg/Imu but found None"
+        if imu_topic is not None:
+            self._conns += [c for c in imu_conns if c.topic == imu_topic]
+            assert len(self._conns), "Expect a topic with msgtype: " \
+                f"sensor_msgs/msg/Imu and '{imu_topic}' name but found None"
+        else:
+            self._conns += [imu_conns[0]]
+
+
+    def __iter__(self) -> Iterator[IMU]:
+
+        for conn, ts, rawdata in self._bag_reader.messages(
+                connections=self._conns):
+
+            msg = self._bag_reader.deserialize(rawdata, conn.msgtype)
+            msg_ts = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            lacc = np.array([
+                msg.linear_acceleration.x, msg.linear_acceleration.y,
+                msg.linear_acceleration.z
+            ])
+            avel = np.array([
+                msg.angular_velocity.x, msg.angular_velocity.y,
+                msg.angular_velocity.z
+            ])
+            yield IMU(lacc, avel, msg_ts)
