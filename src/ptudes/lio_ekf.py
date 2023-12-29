@@ -401,24 +401,12 @@ class LioEkf:
         self._navs_pred += [store_pred]
 
 
-        # cov predict
-        #
-
-        # print(f"ts: {imu_ts}, local_ts: {local_ts:.6f}, "
-        #       f"processImu: {self._imu_curr = }")
-
-        # print(f"processImu: acc={self._imu_curr.lacc}, gyr={self._imu_curr.avel}")
-        # print(f"      prev: acc={self._imu_prev.lacc}, gyr={self._imu_prev.avel}")
-
-
     def processLidarPacket(self, lidar_packet: client.LidarPacket) -> None:
         col_ts = lidar_packet.timestamp[0]
         # print(f"ts: {col_ts}, local_ts: {local_ts:.6f}, "
         #       f"processLidar: {lidar_packet = }")
 
-    def processLidarScan(self,
-                         ls: client.LidarScan,
-                         pose_gt: np.ndarray = None) -> None:
+    def processLidarScan(self, ls: client.LidarScan) -> None:
 
         # self._cov = np.copy(self._cov_init)
 
@@ -619,10 +607,6 @@ class LioEkf:
                 pos = self._kiss_icp.pose[:3, 3]
                 rot = self._kiss_icp.pose[:3, :3]
 
-                if pose_gt is not None:
-                    pos = pose_gt[:3, 3]
-                    rot = pose_gt[:3, :3]
-
                 # add to measurement sets
                 Jp = np.zeros((6, self.STATE_RANK))
                 set_blk(Jp, 0, self.POS_ID, 1.0 * np.eye(3))
@@ -795,7 +779,7 @@ class LioEkf:
         #     self._reset_nav()
 
         if self._local_map.empty():
-            # first scna processed
+            # first scan processed
             self._reset_nav()
             self._navs = []
             self._navs_t = []
@@ -804,6 +788,7 @@ class LioEkf:
 
         store_nav = deepcopy(self._nav_curr)
         store_nav.cov = np.copy(self._cov)
+        store_nav.update = True
         store_nav.scan = ls
         store_nav.xyz = xyz
         store_nav.frame = frame
@@ -818,12 +803,8 @@ class LioEkf:
         store_nav.local_map = self._local_map.point_cloud()
 
         if self._booting:
-            if pose_gt is not None:
-                store_nav.kiss_pose = pose_gt
-                store_nav.kiss_map = np.empty((0,3))
-            else:
-                store_nav.kiss_pose = self._kiss_icp.pose
-                store_nav.kiss_map = self._kiss_icp.local_map_points
+            store_nav.kiss_pose = self._kiss_icp.pose
+            store_nav.kiss_map = self._kiss_icp.local_map_points
 
 
         self._local_map.update(frame_downsample, self._nav_curr.pose_mat())
@@ -852,6 +833,127 @@ class LioEkf:
 
         # input()
 
+
+    def processPoseCorrection(self, pose_corr: np.ndarray) -> None:
+
+        # self._cov = np.copy(self._cov_init)
+
+        store_pred = deepcopy(self._nav_curr)
+        store_pred.cov = np.copy(self._cov)
+        self._navs_pred += [store_pred]
+
+        Rk = self._nav_curr.att_h
+        tk = self._nav_curr.pos
+        # exp_datt = exp_rot_vec(self._nav_err.datt_v)
+        # if src.size:
+        print("tk = ", tk)
+        print("Rk = ", Rk)
+
+        dR = exp_rot_vec(self._nav_err.datt_v)
+
+        sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
+        sum_res = np.zeros(self.STATE_RANK)
+
+        pos = pose_corr[:3, 3]
+        rot = pose_corr[:3, :3]
+
+        # add to measurement sets
+        Jp = np.zeros((6, self.STATE_RANK))
+        set_blk(Jp, 0, self.POS_ID, 1.0 * np.eye(3))
+        set_blk(Jp, 3, self.PHI_ID, 1.0 * np.eye(3))
+        # set_blk(Jp, 3, self.PHI_ID, rot.transpose())
+        Epos = np.square(0.05 * np.eye(3))
+        Eatt = np.square(0.1 * np.eye(3))
+        Epos_inv = np.linalg.inv(Epos)
+        Eatt_inv = np.linalg.inv(Eatt)
+        Epa_inv = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
+        Epa = scipy.linalg.block_diag(Epos, Eatt)
+        # Epa = scipy.linalg.block_diag(Epos_inv)
+        # print("Epa = \n", Epa)
+        # print("Epa_inv = \n", Epa_inv)
+        sum_Ji += Jp.transpose() @ Epa_inv @ Jp
+        resid_pa = np.zeros(6)
+        resid_pa[:3] = pos - self._nav_curr.pos - self._nav_err.dpos
+        Rk_inv = np.linalg.inv(Rk)
+        dR_inv = np.linalg.inv(dR)
+        resid_pa[3:] = log_rot_mat(rot @ Rk_inv @ dR_inv)
+        # print("dR = ", dR)
+        # print("Rk = ", Rk)
+        # print("rotv = ", log_rot_mat(dR @ Rk @ rot.transpose()))
+        # resid_pa[3:] = log_rot_mat(dR @ Rk @ rot.transpose())
+        print("resid_pa = ", resid_pa)
+        sum_res += Jp.transpose() @ Epa_inv @ resid_pa
+        # print("sum_Ji + Pos = \n", sum_Ji)
+        # print("sum_res + Pos = \n", sum_res)
+
+        # S = Jp @ self._cov @ Jp.transpose() + Epa
+        # K = self._cov @ Jp.transpose() @ np.linalg.inv(S)
+        # print("S = \n", S)
+        # print("K = \n", K)
+        # delta_x = K @ resid_pa
+
+        # self._cov = np.copy(self._cov_init)
+
+        cov_inv = np.linalg.inv(self._cov)
+        # print("cov_inv = \n", cov_inv)
+        H_plus_cov = np.linalg.inv(sum_Ji + cov_inv)
+        # print("H_plus_cov = \n", H_plus_cov)
+        # K_gain = H_plus_cov @ Ji.transpose() @ self._cov_scan_meas_inv
+        # print("K_gain = \n", K_gain)
+        # print("delta_x0 = \n", delta_x)
+        delta_x = H_plus_cov @ sum_res
+
+        print("delta_x = \n", delta_x)
+
+        # print("H_plus_cov @ sum_Ji = \n", H_plus_cov @ sum_Ji)
+
+        # apply correction error-state
+        self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
+        self._nav_err.dvel += delta_x[self.VEL_ID:self.VEL_ID + 3]
+        self._nav_err.datt_v += delta_x[self.PHI_ID:self.PHI_ID + 3]
+        # self._nav_err.datt_v = log_rot_mat(
+        #     exp_rot_vec(delta_x[self.PHI_ID:self.PHI_ID + 3])
+        #     @ exp_rot_vec(self._nav_err.datt_v))
+        self._nav_err.dbias_gyr += delta_x[self.BG_ID:self.BG_ID + 3]
+        self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
+
+        self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
+
+        print(f"_nav_err FINAL [POSE CORR] = \n", self._nav_err)
+
+        self._nav_curr.pos += self._nav_err.dpos
+        # self._nav_curr.pos = new_icp_pose[:3, 3]
+        self._nav_curr.vel += self._nav_err.dvel
+        self._nav_curr.att_h = exp_rot_vec(self._nav_err.datt_v) @ self._nav_curr.att_h
+        # self._nav_curr.att_h =  self._nav_curr.att_h @ exp_rot_vec(self._nav_err.datt_v)
+        # self._nav_curr.att_h = new_icp_pose[:3, :3]
+        self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
+        self._nav_curr.bias_acc += self._nav_err.dbias_acc
+
+
+        print("\n_nav_prev (pre POSE CORR UPDATED) = \n", self._nav_prev)
+        print("_nav_curr (POSE CORR UPDATED) = \n", self._nav_curr)
+        print("UPDATED COV:::::::::::::::::::::\n", self._cov)
+
+        self._reset_nav_err()
+
+        store_nav = deepcopy(self._nav_curr)
+        store_nav.cov = np.copy(self._cov)
+        store_nav.update = True
+
+        # i.e. correction pose
+        store_nav.kiss_pose = pose_corr
+
+        self._navs += [store_nav]
+        self._navs_t += [self._imu_curr.ts]
+        self._nav_scan_idxs += [len(self._navs) - 1]
+        print("self._nav_scan_idxs = ", self._nav_scan_idxs)
+
+        assert len(self._navs) == len(self._navs_pred)
+
+        self._nav_prev = deepcopy(self._nav_curr)
+
+        # input()
 
     def deskew_scan(self, xyz: np.ndarray,
                     timestamps: np.ndarray,
@@ -1002,11 +1104,11 @@ class LioEkfScans(client.ScanSource):
 
                 if batch(packet, ls_write):
                     # new scan finished
-                    if scan_idx >= self._start_scan:
-                        self._lio_ekf.processLidarScan(ls_write)
-                        print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
+                    # if scan_idx >= self._start_scan:
+                    #     self._lio_ekf.processLidarScan(ls_write)
+                    #     print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
 
-                    yield ls_write
+                    # yield ls_write
 
                     if (self._end_scan is not None
                             and scan_idx >= self._end_scan):
@@ -1035,18 +1137,20 @@ class LioEkfScans(client.ScanSource):
                     # imu = IMU(acc, gyr, imu_idx * 0.001)
 
                     # self._lio_ekf.processImu(imu)
-                    self._lio_ekf.processImuPacket(packet)
 
-                    # imu = next(imu_it)
-                    # self._lio_ekf.processImu(imu)
+                    # self._lio_ekf.processImuPacket(packet)
 
-                    # if imu.ts > pose_ts:
-                    #     print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
-                    #     pose_idx += 1
-                    #     pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
-                    #     pose_ts = gts[pose_idx][0]
-                    #     print("pose_corr = \n", pose_corr)
-                    #     self._lio_ekf.processLidarScan(ls_write, pose_gt=pose_corr)
+                    imu = next(imu_it)
+
+                    if imu.ts > pose_ts:
+                        print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
+                        pose_idx += 1
+                        pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
+                        pose_ts = gts[pose_idx][0]
+                        print("pose_corr = \n", pose_corr)
+                        self._lio_ekf.processPoseCorrection(pose_corr)
+
+                    self._lio_ekf.processImu(imu)
 
                     print("NAV_CURR (Im) = ", self._lio_ekf._nav_curr)
 

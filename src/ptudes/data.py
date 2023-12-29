@@ -39,6 +39,8 @@ class NavState:
     bias_gyr: np.ndarray = np.zeros(3)  # Vec3
     bias_acc: np.ndarray = np.zeros(3) # Vec3
 
+    update: bool = False
+
     # NavStateLog for viz/debug parts
     cov: Optional[np.ndarray] = None
     scan: Optional[client.LidarScan] = None

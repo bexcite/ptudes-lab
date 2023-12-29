@@ -276,7 +276,7 @@ def lio_ekf_viz(lio_ekf):
     from ptudes.utils import (make_point_viz)
     from ptudes.viz_utils import PointCloud
     point_viz = make_point_viz(f"Traj: poses = {len(lio_ekf._navs)}",
-                               show_origin=False)
+                               show_origin=True)
 
     def next_scan_based_nav(navs: List[NavState], start_idx: int = 0) -> int:
         ln = len(navs)
@@ -426,10 +426,10 @@ def lio_ekf_viz(lio_ekf):
 
     for idx, nav in enumerate(lio_ekf._navs):
         pose_mat = nav.pose_mat()
-        axis_length = 0.5 if nav.scan is not None else 0.1
+        axis_length = 0.5 if nav.update is not None else 0.1
         # axis_label = f"{idx}" if nav.scan is not None else ""
         axis_label = ""
-        if nav.scan:
+        if nav.update:
             nav_axis_scan += [
                 viz.AxisWithLabel(point_viz,
                                   pose=pose_mat,
