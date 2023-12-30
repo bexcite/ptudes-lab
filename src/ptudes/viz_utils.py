@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 from ouster.viz import PointViz, Cloud
 
+from scipy.spatial.transform import Rotation
+
 import ouster.sdk.pose_util as pu
 
 import numpy as np
@@ -214,9 +216,9 @@ def lio_ekf_graphs(lio_ekf):
     # ax.set_ylabel('Y')
 
     # ax.set_zlabel('Z')
-    plt.gcf().canvas.mpl_connect(
-        'key_release_event',
-        lambda event: [exit(0) if event.key == 'escape' else None])
+    # plt.gcf().canvas.mpl_connect(
+    #     'key_release_event',
+    #     lambda event: [exit(0) if event.key == 'escape' else None])
 
     i = 0
     ax[i].plot(t, acc_x)
@@ -265,6 +267,124 @@ def lio_ekf_graphs(lio_ekf):
 
     for a in ax + [axX, axY, axZ]:
         a.plot(scan_t, np.zeros_like(scan_t), '8r')
+
+    plt.show()
+
+
+def euler_angles_diff(nav1: NavState, nav2: NavState) -> np.ndarray:
+    eul1 = Rotation.from_matrix(nav1.att_h).as_euler("XYZ")
+    eul2 = Rotation.from_matrix(nav2.att_h).as_euler("XYZ")
+    diff = (eul1 - eul2)
+    diff[diff >= np.pi] -= 2 * np.pi
+    diff[diff < -np.pi] += 2 * np.pi
+    return diff
+
+
+def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
+    """Plots of pos/angle errors"""
+
+    assert set(lio_ekf_gt._navs_t) == set(lio_ekf._navs_t)
+
+    dr_present = False
+    if lio_ekf_dr is not None:
+        dr_present = True
+        assert set(lio_ekf_gt._navs_t) == set(lio_ekf_dr._navs_t)
+
+    # remove navs dupes due to update navs in the list
+    navs_gt = []
+    navs = []
+    navs_dr = []
+    navs_t = sorted(list(set(lio_ekf_gt._navs_t)))
+    ngt_it = iter(zip(lio_ekf_gt._navs_t[::-1], lio_ekf_gt._navs[::-1]))
+    n_it = iter(zip(lio_ekf._navs_t[::-1], lio_ekf._navs[::-1]))
+    if dr_present:
+        ndr_it = iter(zip(lio_ekf_dr._navs_t[::-1], lio_ekf_dr._navs[::-1]))
+    try:
+        ngt_t, ngt = next(ngt_it)
+        n_t, n = next(n_it)
+        if dr_present:
+            ndr_t, ndr = next(ndr_it)
+        for t in navs_t[::-1]:
+            assert t == ngt_t
+            assert t == n_t
+            navs_gt.append(ngt)
+            navs.append(n)
+            if dr_present:
+                assert t == ndr_t
+                navs_dr.append(ndr)
+                while t == ndr_t:
+                    ndr_t, ndr = next(ndr_it)
+            while t == ngt_t:
+                ngt_t, ngt = next(ngt_it)
+            while t == n_t:
+                n_t, n = next(n_it)
+    except StopIteration:
+        pass
+    navs_gt = navs_gt[::-1]
+    navs = navs[::-1]
+    navs_dr = navs_dr[::-1]
+    assert len(navs) == len(navs_t)
+    assert len(navs) == len(navs_gt)
+    if dr_present:
+        assert len(navs) == len(navs_dr)
+
+    min_ts = navs_t[0]
+
+    dpos = np.array(
+        [nav_gt.pos - nav.pos for nav_gt, nav in zip(navs_gt, navs)])
+    dpos_x, dpos_y, dpos_z = np.hsplit(dpos, 3)
+
+    deul = np.array(
+        [euler_angles_diff(nav_gt, nav) for nav_gt, nav in zip(navs_gt, navs)])
+    deul_r, deul_p, deul_y = np.hsplit(deul, 3)
+
+    print(deul)
+
+    if dr_present:
+        drpos = np.array(
+            [nav_gt.pos - nav.pos for nav_gt, nav in zip(navs_gt, navs_dr)])
+        drpos_x, drpos_y, drpos_z = np.hsplit(drpos, 3)
+
+        dreul = np.array([
+            euler_angles_diff(nav_gt, nav)
+            for nav_gt, nav in zip(navs_gt, navs_dr)
+        ])
+        dreul_r, dreul_p, dreul_y = np.hsplit(dreul, 3)
+
+    fig, ax = plt.subplots(6, 1, sharex=True)
+    for a in ax.flat:
+        a.grid(True)
+
+    upd_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_scan_idxs]
+
+    t = [t - min_ts for t in navs_t]
+
+    i = 0
+    ax[i].plot(t, dpos_x)
+    ax[i].set_ylabel('X err')
+    ax[i + 1].plot(t, dpos_y)
+    ax[i + 1].set_ylabel('Y err')
+    ax[i + 2].plot(t, dpos_z)
+    ax[i + 2].set_ylabel('Z err')
+    if dr_present:
+        ax[i].plot(t, drpos_x)
+        ax[i + 1].plot(t, drpos_y)
+        ax[i + 2].plot(t, drpos_z)
+
+    i = 3
+    ax[i].plot(t, deul_r)
+    ax[i].set_ylabel('Roll err')
+    ax[i + 1].plot(t, deul_p)
+    ax[i + 1].set_ylabel('Pitch err')
+    ax[i + 2].plot(t, deul_y)
+    ax[i + 2].set_ylabel('Yaw err')
+    if dr_present:
+        ax[i].plot(t, dreul_r)
+        ax[i + 1].plot(t, dreul_p)
+        ax[i + 2].plot(t, dreul_y)
+
+    for a in ax.flat:
+        a.plot(upd_t, np.zeros_like(upd_t), '8r')
 
     plt.show()
 

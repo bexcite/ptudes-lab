@@ -25,7 +25,7 @@ from ptudes.data import GRAV, IMU, NavState, set_blk, blk
 
 from ptudes.utils import read_newer_college_gt
 
-from ptudes.viz_utils import lio_ekf_graphs, lio_ekf_viz
+from ptudes.viz_utils import lio_ekf_graphs, lio_ekf_error_graphs, lio_ekf_viz
 
 from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
                               GREY_COLOR1, WHITE_COLOR)
@@ -111,7 +111,9 @@ class LioEkf:
         # self._imu_intr_rot = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
         self._imu_intr_rot = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
+        # self._g_fn = GRAV * np.array([0, 0, -1])
         self._g_fn = GRAV * np.array([0, 0, -1])
+        # self._g_fn = GRAV * np.array([-0.00054619, 9.77265772, -0.81460648])
 
         self._initpos_std = np.diag([20.05, 20.05, 20.05])
         self._initvel_std = np.diag([5.05, 5.05, 5.05])
@@ -121,16 +123,36 @@ class LioEkf:
         self._initbg_std = np.diag([1.5, 1.5, 1.5])
         self._initba_std = np.diag([0.5, 0.5, 0.5])
 
+
+        self._initba = np.zeros(3)
+        self._initbg = np.zeros(3)
+        # self._initba = np.array([-0.04, -0.12, 0.2])
+        # self._initbg = np.array([-0.004, -0.001, 0.0035])
+
         # super good (from IMU IAM-20680HT Datasheet)
-        self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
-        self._gyr_arw = 1 * DEG2RAD  #  rad/s
-        self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
-        self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
+        # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
+        # self._gyr_arw = 1 * DEG2RAD  #  rad/s
+        # self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(Hz)
+        # self._gyr_bias_std = 0.005 * DEG2RAD  # rad/s / sqrt(Hz)
 
         # self._acc_vrw = 50 * 1e-3 * GRAV  # m/s^2
         # self._gyr_arw = 10 * DEG2RAD  #  rad/s
         # self._acc_bias_std = 135 * 1e-6 * GRAV  # m/s^2 / sqrt(H)
         # self._gyr_bias_std = 0.01 * DEG2RAD  # rad/s / sqrt(H)
+
+        # IMU0 (Newer College)
+        self._acc_vrw = 0.0043  # m/s^2
+        self._gyr_arw = 0.000266  #  rad/s
+        self._acc_bias_std = 0.019  # m/s^2 / sqrt(Hz)
+        self._gyr_bias_std = 0.019  # rad/s / sqrt(Hz)
+
+        print("Imu noise params:")
+        print(f"{self._acc_vrw = }")
+        print(f"{self._gyr_arw = }")
+        print(f"{self._acc_bias_std = }")
+        print(f"{self._gyr_bias_std = }")
+
+        # exit(0)
 
         self._imu_corr_time = 3600  # s
 
@@ -235,8 +257,10 @@ class LioEkf:
         self._nav_curr.pos = np.zeros(3)
         self._nav_curr.vel = np.zeros(3)
         self._nav_curr.att_h = np.eye(3)
-        self._nav_curr.bias_acc = np.zeros(3)
-        self._nav_curr.bias_gyr = np.zeros(3)
+        # self._nav_curr.bias_gyr = np.zeros(3)
+        # self._nav_curr.bias_acc = np.zeros(3)
+        self._nav_curr.bias_gyr = self._initbg
+        self._nav_curr.bias_acc = self._initba
         self._nav_prev = deepcopy(self._nav_curr)
         self._cov = np.copy(self._cov_init)
         print("------ RESET --- NAV -----")
@@ -285,6 +309,11 @@ class LioEkf:
 
         rot_vec_b = imucurr_angle + np.cross(imupre_angle, imucurr_angle) / 12
         self._nav_curr.att_h = self._nav_prev.att_h @ exp_rot_vec(rot_vec_b)
+
+        # print("det att_h = ", np.linalg.det(self._nav_curr.att_h))
+        # r = self._nav_curr.att_h
+        # print("rrt = ", r @ r.transpose())
+        # input()
 
         # rvec = log_rot_mat(self._nav_curr.att_h)
         # rvec2 = _no_scipy_log_rot_mat(self._nav_curr.att_h)
@@ -376,7 +405,7 @@ class LioEkf:
 
         self._cov = (Ak @ self._cov @ Ak.transpose() +
                      Bk @ self._cov_mnoise @ Bk.transpose() +
-                     self._cov_imu_bnoise)
+                     sk * self._cov_imu_bnoise)
 
         # np.set_printoptions(precision=3, linewidth=180)
         # print("UPDATED COV:::::::::::::::::::::\n", self._cov)
@@ -386,8 +415,8 @@ class LioEkf:
 
         # logging IMU data for graphs
         self._lg_t += [self._imu_curr.ts]
-        self._lg_acc += [self._imu_curr.lacc]
-        self._lg_gyr += [self._imu_curr.avel]
+        self._lg_acc += [self._imu_curr.lacc.copy()]
+        self._lg_gyr += [self._imu_curr.avel.copy()]
 
 
         # test only when processLidarScan is disabled
@@ -399,6 +428,8 @@ class LioEkf:
         store_pred = deepcopy(self._nav_curr)
         store_pred.cov = np.copy(self._cov)
         self._navs_pred += [store_pred]
+
+        # self._cov = np.copy(self._cov_init)
 
 
     def processLidarPacket(self, lidar_packet: client.LidarPacket) -> None:
@@ -858,25 +889,26 @@ class LioEkf:
         rot = pose_corr[:3, :3]
 
         # add to measurement sets
-        Jp = np.zeros((6, self.STATE_RANK))
+        Jp = np.zeros((3, self.STATE_RANK))
         set_blk(Jp, 0, self.POS_ID, 1.0 * np.eye(3))
-        set_blk(Jp, 3, self.PHI_ID, 1.0 * np.eye(3))
+        # set_blk(Jp, 3, self.PHI_ID, 1.0 * np.eye(3))
         # set_blk(Jp, 3, self.PHI_ID, rot.transpose())
         Epos = np.square(0.05 * np.eye(3))
         Eatt = np.square(0.1 * np.eye(3))
         Epos_inv = np.linalg.inv(Epos)
         Eatt_inv = np.linalg.inv(Eatt)
-        Epa_inv = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
+        # Epa_inv = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
+        Epa_inv = scipy.linalg.block_diag(Epos_inv)
         Epa = scipy.linalg.block_diag(Epos, Eatt)
         # Epa = scipy.linalg.block_diag(Epos_inv)
         # print("Epa = \n", Epa)
         # print("Epa_inv = \n", Epa_inv)
         sum_Ji += Jp.transpose() @ Epa_inv @ Jp
-        resid_pa = np.zeros(6)
+        resid_pa = np.zeros(3)
         resid_pa[:3] = pos - self._nav_curr.pos - self._nav_err.dpos
         Rk_inv = np.linalg.inv(Rk)
         dR_inv = np.linalg.inv(dR)
-        resid_pa[3:] = log_rot_mat(rot @ Rk_inv @ dR_inv)
+        # resid_pa[3:] = log_rot_mat(rot @ Rk_inv @ dR_inv)
         # print("dR = ", dR)
         # print("Rk = ", Rk)
         # print("rotv = ", log_rot_mat(dR @ Rk @ rot.transpose()))
@@ -905,6 +937,8 @@ class LioEkf:
 
         print("delta_x = \n", delta_x)
 
+        self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
+
         # print("H_plus_cov @ sum_Ji = \n", H_plus_cov @ sum_Ji)
 
         # apply correction error-state
@@ -916,8 +950,6 @@ class LioEkf:
         #     @ exp_rot_vec(self._nav_err.datt_v))
         self._nav_err.dbias_gyr += delta_x[self.BG_ID:self.BG_ID + 3]
         self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
-
-        self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
 
         print(f"_nav_err FINAL [POSE CORR] = \n", self._nav_err)
 
@@ -952,6 +984,8 @@ class LioEkf:
         assert len(self._navs) == len(self._navs_pred)
 
         self._nav_prev = deepcopy(self._nav_curr)
+
+        # self._cov = np.copy(self._cov_init)
 
         # input()
 
@@ -1052,6 +1086,9 @@ class LioEkfScans(client.ScanSource):
 
         self._lio_ekf = LioEkf(source.metadata)
 
+        self._lio_ekf_gt = LioEkf(source.metadata)
+        self._lio_ekf_corr = LioEkf(source.metadata)
+
 
     def __iter__(self) -> Iterable[LidarScan]:
         """Consume packets with odometry"""
@@ -1088,6 +1125,10 @@ class LioEkfScans(client.ScanSource):
 
         # print("dts = ", imus[0].ts, gts[0][0], gts[0][0] - imus[0].ts)
         print("gt_pose = ", gt_pose)
+
+        imu = IMU()
+        imu_noisy = IMU()
+        import numpy.random as npr
 
         while True:
             try:
@@ -1140,17 +1181,62 @@ class LioEkfScans(client.ScanSource):
 
                     # self._lio_ekf.processImuPacket(packet)
 
-                    imu = next(imu_it)
 
-                    if imu.ts > pose_ts:
-                        print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
-                        pose_idx += 1
-                        pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
-                        pose_ts = gts[pose_idx][0]
-                        print("pose_corr = \n", pose_corr)
-                        self._lio_ekf.processPoseCorrection(pose_corr)
 
-                    self._lio_ekf.processImu(imu)
+                    # imu = next(imu_it)
+
+
+                    if imu_idx % 10 == 0:
+                        acc = npr.normal(0.0, 1.0, 3)
+                        acc[1] = 0
+                        acc[2] = 0
+                        acc = acc - self._lio_ekf._g_fn
+                        # gyr = npr.normal(0.0, 1.0, 3)
+                        gyr = [0,0,0]
+                        # gyr[0] = 0
+                        # gyr[1] = 0
+                        # gyr[2] = 0
+                        gyr = np.zeros(3)
+                        imu = IMU(acc, gyr, imu_idx * 0.01)
+                        imu_noisy = IMU(acc + np.array([0.9, -0.2, -0.4]), gyr, imu_idx * 0.01)
+                        print("IMU 0: ", imu)
+                        print("IMU 1: ", imu_noisy)
+                    else:
+                        imu.ts = imu_idx * 0.01
+                        imu_noisy.ts = imu_idx * 0.01
+                        # input()
+
+                    # if imu.ts > pose_ts:
+                    #     print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
+                    #     pose_idx += 1
+                    #     pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
+                    #     pose_ts = gts[pose_idx][0]
+                    #     print("pose_corr = \n", pose_corr)
+                    #     self._lio_ekf.processPoseCorrection(pose_corr)
+
+                    
+
+                    self._lio_ekf.processImu(deepcopy(imu_noisy))
+                    self._lio_ekf_corr.processImu(deepcopy(imu_noisy))
+
+                    print("imu_to_gt = ", imu)
+                    self._lio_ekf_gt.processImu(deepcopy(imu))
+
+                    if (imu_idx + 1) % 10 == 0:
+                        # print(f"NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
+                        # print(f"NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
+                        # print(f"NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
+                        self._lio_ekf_corr.processPoseCorrection(
+                            self._lio_ekf_gt._nav_curr.pose_mat())
+                        # print(f"0NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
+                        # print(f"0NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
+                        # print(f"0NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
+                        # input()
+
+                    # print(f"GYR xyz[len: {imu_idx}]:\n")
+                    # for i in range(len(self._lio_ekf._lg_gyr)):
+                    #     print(self._lio_ekf._lg_gyr[i])
+                    # input()
 
                     print("NAV_CURR (Im) = ", self._lio_ekf._nav_curr)
 
@@ -1163,10 +1249,21 @@ class LioEkfScans(client.ScanSource):
               f"scan_idx = {scan_idx}, "
               f"scans_num = {self._lio_ekf._scan_idx}")
 
+        print("NAV_CURR_GT = ", self._lio_ekf_gt._nav_curr)
+        print("NAV_CURR = ", self._lio_ekf._nav_curr)
+        print("NAV_CURR CORR = ", self._lio_ekf_corr._nav_curr)
+
         if self._plotting == "graphs":
-            lio_ekf_graphs(self._lio_ekf)
+            lio_ekf_graphs(self._lio_ekf_corr)
+            # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
+            lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr, self._lio_ekf)
+            # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr)
+            # lio_ekf_graphs(self._lio_ekf_gt)
+            # lio_ekf_graphs(self._lio_ekf)
         elif self._plotting == "point_viz":
+            lio_ekf_viz(self._lio_ekf_gt)
             lio_ekf_viz(self._lio_ekf)
+            lio_ekf_viz(self._lio_ekf_corr)
         else:
             print(f"WARNING: plotting param '{self._plotting}' doesn't "
                   f"supported")
