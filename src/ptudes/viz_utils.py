@@ -338,8 +338,6 @@ def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
         [euler_angles_diff(nav_gt, nav) for nav_gt, nav in zip(navs_gt, navs)])
     deul_r, deul_p, deul_y = np.hsplit(deul, 3)
 
-    print(deul)
-
     if dr_present:
         drpos = np.array(
             [nav_gt.pos - nav.pos for nav_gt, nav in zip(navs_gt, navs_dr)])
@@ -360,14 +358,14 @@ def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
     t = [t - min_ts for t in navs_t]
 
     i = 0
-    ax[i].plot(t, dpos_x)
+    ax[i].plot(t, dpos_x, label='error between gt and corrected')
     ax[i].set_ylabel('X err')
     ax[i + 1].plot(t, dpos_y)
     ax[i + 1].set_ylabel('Y err')
     ax[i + 2].plot(t, dpos_z)
     ax[i + 2].set_ylabel('Z err')
     if dr_present:
-        ax[i].plot(t, drpos_x)
+        ax[i].plot(t, drpos_x, label='error between gt and dr')
         ax[i + 1].plot(t, drpos_y)
         ax[i + 2].plot(t, drpos_z)
 
@@ -383,8 +381,14 @@ def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
         ax[i + 1].plot(t, dreul_p)
         ax[i + 2].plot(t, dreul_y)
 
-    for a in ax.flat:
-        a.plot(upd_t, np.zeros_like(upd_t), '8r')
+
+    for idx, a in enumerate(ax.flat):
+        a.plot(upd_t,
+               np.zeros_like(upd_t),
+               '8r',
+               label="correction (update)" if idx == 0 else "")
+
+    fig.legend(loc="upper center")
 
     plt.show()
 

@@ -2,6 +2,7 @@ from typing import Optional, Iterable, Union, List, Dict
 
 import numpy as np
 import scipy
+from scipy.spatial.transform import Rotation
 from copy import deepcopy
 
 from ouster.client import (SensorInfo, LidarScan, ChanField, FieldTypes,
@@ -410,9 +411,13 @@ class LioEkf:
         # np.set_printoptions(precision=3, linewidth=180)
         # print("UPDATED COV:::::::::::::::::::::\n", self._cov)
 
+        self._log_on_imu_process()
+
         self._nav_prev = deepcopy(self._nav_curr)
 
+        # self._cov = np.copy(self._cov_init)
 
+    def _log_on_imu_process(self):
         # logging IMU data for graphs
         self._lg_t += [self._imu_curr.ts]
         self._lg_acc += [self._imu_curr.lacc.copy()]
@@ -429,7 +434,172 @@ class LioEkf:
         store_pred.cov = np.copy(self._cov)
         self._navs_pred += [store_pred]
 
+
+    def processImuAlt(self, imu: IMU) -> None:
+
+        self._imu_prev = self._imu_curr
+
+        imu.dt = imu.ts - self._imu_prev.ts
+        print(f"IMU ALT[{self._imu_idx}] = ", imu)
+        self._imu_idx += 1
+
+        self._imu_curr = imu
+
+        if not self._imu_initialized:
+            self._imu_initialized = True
+            return
+
+        self._insMechAlt()
+
+        dt = self._imu_curr.dt
+
+        acc_body = self._imu_curr.lacc - self._nav_curr.bias_acc
+
+        imu_curr_avel = self._imu_curr.avel - self._nav_curr.bias_gyr
+        dtheta = imu_curr_avel * dt
+        rot_dtheta = Rotation.from_rotvec(dtheta).as_matrix()
+
+        Fx = np.eye(self.STATE_RANK)
+        set_blk(Fx, self.POS_ID, self.VEL_ID, dt * np.eye(3))
+        set_blk(Fx, self.VEL_ID, self.PHI_ID, - dt * self._nav_prev.att_h @ vee(acc_body) )
+        set_blk(Fx, self.VEL_ID, self.BA_ID, - dt * self._nav_prev.att_h )
+        set_blk(Fx, self.PHI_ID, self.PHI_ID, rot_dtheta.transpose())
+        set_blk(Fx, self.PHI_ID, self.BG_ID, - dt * np.eye(3))
+
+        W = np.zeros((self.STATE_RANK, self.STATE_RANK))
+        set_blk(W, self.VEL_ID, self.VEL_ID,
+                dt * dt * np.square(self._acc_bias_std * np.eye(3)))
+        set_blk(W, self.PHI_ID, self.PHI_ID,
+                dt * dt * np.square(self._gyr_bias_std * np.eye(3)))
+        set_blk(W, self.BA_ID, self.BA_ID,
+                dt * np.square(self._acc_vrw * np.eye(3)))
+        set_blk(W, self.BG_ID, self.BG_ID,
+                dt * np.square(self._gyr_arw * np.eye(3)))
+        
+
+        self._cov = Fx @ self._cov @ Fx.transpose() + W
+
+
+        # print("SK = ", sk)
+
+        # update error-state (delta X)
+        # # TODO: Use real R(k-1)!
+        # dk = self._nav_prev.att_h @ np.cross(self._imu_curr.lacc,
+        #                                      self._nav_err.datt_v)
+        # self._nav_err.dpos = self._nav_err.dpos + self._nav_err.dvel * sk
+
+        # self._nav_err.dvel = (
+        #     self._nav_err.dvel + sk * dk +
+        #     sk * self._nav_prev.att_h @ self._nav_err.dbias_acc)
+
+        # self._nav_err.datt_v = (
+        #     self._nav_err.datt_v - sk *
+        #     (self._nav_prev.att_h @ self._nav_err.dbias_gyr))
+
+        # print("nav_err = \n", self._nav_err)
+
+        # Ak = np.eye(self.STATE_RANK)
+        # set_blk(Ak, self.POS_ID, self.VEL_ID, sk * np.eye(3))
+
+        # # print("OPT1 = \n", self._nav_prev.att_h @ vee(self._imu_curr.lacc))
+        # # print("OPT2 = \n", vee(self._nav_prev.att_h @ self._imu_curr.lacc))
+        # set_blk(Ak, self.VEL_ID, self.PHI_ID,
+        #         sk * self._nav_prev.att_h @ vee(self._imu_curr.lacc))
+        # set_blk(Ak, self.VEL_ID, self.BA_ID, sk * self._nav_prev.att_h)
+        # set_blk(Ak, self.PHI_ID, self.BG_ID, -1.0 * sk * self._nav_prev.att_h)
+
+        # Bk = np.zeros((self.STATE_RANK, 6))
+        # set_blk(Bk, self.VEL_ID, 3,
+        #         -sk * vee(self._nav_err.datt_v) @ self._nav_prev.att_h)
+
+        # self._cov = (Ak @ self._cov @ Ak.transpose() +
+        #              Bk @ self._cov_mnoise @ Bk.transpose() +
+        #              sk * self._cov_imu_bnoise)
+
+        # np.set_printoptions(precision=3, linewidth=180)
+        # print("UPDATED COV:::::::::::::::::::::\n", self._cov)
+
         # self._cov = np.copy(self._cov_init)
+
+        self._log_on_imu_process()
+
+        self._nav_prev = deepcopy(self._nav_curr)
+
+        # self._cov = np.copy(self._cov_init)
+
+    def _insMechAlt(self):
+        # print(f"nav_prev = {self._nav_prev}")
+        # print(f"nav_curr = {self._nav_curr}")
+
+        # print(f"imu_prev = {self._imu_prev}")
+        # print(f"imu_curr = {self._imu_curr}")
+
+        # compensate bias imu/gyr
+        imu_curr_lacc = self._imu_curr.lacc - self._nav_curr.bias_acc
+        imu_curr_avel = self._imu_curr.avel - self._nav_curr.bias_gyr
+
+        dt = self._imu_curr.dt
+
+        imu_curr_lacc_g = self._nav_curr.att_h @ imu_curr_lacc
+        dtheta = imu_curr_avel * dt
+        rot_dtheta = Rotation.from_rotvec(dtheta).as_matrix()
+
+        self._nav_curr.pos = self._nav_curr.pos + self._nav_curr.vel * dt + 0.5 * (
+            imu_curr_lacc_g + self._g_fn) * dt * dt
+        self._nav_curr.vel = self._nav_curr.vel + (imu_curr_lacc_g +
+                                                   self._g_fn) * dt
+        self._nav_curr.att_h = self._nav_curr.att_h @ rot_dtheta
+
+
+        # imucurr_vel = self._imu_curr.lacc * sk
+        # imucurr_angle = self._imu_curr.avel * sk
+        # imupre_vel = self._imu_prev.lacc * sk
+        # imupre_angle = self._imu_prev.avel * sk
+
+        # p1 = np.cross(imucurr_angle, imucurr_vel) / 2   #  1/2 * (w(k) x a(k) * s(k)^2)
+        # p2 = np.cross(imupre_angle, imucurr_vel) / 12   #  1/12 * (w(k-1) x a(k)) * s(k)^2
+        # p3 = np.cross(imucurr_angle, imupre_vel) / 12   #  1/12 * (a(k-1) x w(k)) * s(k)^2
+
+        # delta_v_fb = imucurr_vel + p1 + p2 - p3
+
+        # delta_v_fn = self._nav_prev.att_h @ delta_v_fb
+
+        # # gravity vel part
+        # delta_vgrav = self._g_fn * sk
+
+        # # print(f"delta_grav = {delta_vgrav}")
+        # # print(f"delta_v_fn  = {delta_v_fn}")
+
+        # self._nav_curr.vel = self._nav_prev.vel + delta_vgrav + delta_v_fn
+
+        # self._nav_curr.pos = self._nav_prev.pos + 0.5 * sk * (
+        #     self._nav_curr.vel + self._nav_prev.vel)
+
+        # rot_vec_b = imucurr_angle + np.cross(imupre_angle, imucurr_angle) / 12
+        # self._nav_curr.att_h = self._nav_prev.att_h @ exp_rot_vec(rot_vec_b)
+
+        # print("det att_h = ", np.linalg.det(self._nav_curr.att_h))
+        # r = self._nav_curr.att_h
+        # print("rrt = ", r @ r.transpose())
+        # input()
+
+        # rvec = log_rot_mat(self._nav_curr.att_h)
+        # rvec2 = _no_scipy_log_rot_mat(self._nav_curr.att_h)
+        # print("rmat0 = \n", self._nav_curr.att_h)
+        # print("rmat1 = \n", exp_rot_vec(rvec))
+        # print("rvec0 = ", rvec)
+        # print("rvec1 = ", log_rot_mat(exp_rot_vec(rvec)))
+        # print("rvec2 = ", rvec2)
+        # if (n := np.linalg.norm(rvec) > np.pi):
+        #     rvec3 = (n - np.pi) / n * rvec
+        #     print("rvec3 = ", rvec3)
+
+
+
+
+        # print(f"after velocity: {self._nav_curr.vel = }")
+        # print(f"after position: {self._nav_curr.pos = }")
+        # print(f"after rotation:\n {self._nav_curr.att_h}\n")
 
 
     def processLidarPacket(self, lidar_packet: client.LidarPacket) -> None:
@@ -969,6 +1139,123 @@ class LioEkf:
 
         self._reset_nav_err()
 
+        self._log_on_pose_corr(pose_corr)
+
+        self._nav_prev = deepcopy(self._nav_curr)
+
+        # input()
+
+    def processPoseCorrectionAlt(self, pose_corr: np.ndarray) -> None:
+
+        store_pred = deepcopy(self._nav_curr)
+        store_pred.cov = np.copy(self._cov)
+        self._navs_pred += [store_pred]
+
+        Rk = self._nav_curr.att_h
+        tk = self._nav_curr.pos
+        # exp_datt = exp_rot_vec(self._nav_err.datt_v)
+        # if src.size:
+        print("tk = ", tk)
+        print("Rk = ", Rk)
+
+        dR = exp_rot_vec(self._nav_err.datt_v)
+
+        sum_Ji = np.zeros((self.STATE_RANK, self.STATE_RANK))
+        sum_res = np.zeros(self.STATE_RANK)
+
+        pos = pose_corr[:3, 3]
+        rot = pose_corr[:3, :3]
+
+        # add to measurement sets
+        Jp = np.zeros((6, self.STATE_RANK))
+        set_blk(Jp, 0, self.POS_ID, 1.0 * np.eye(3))
+        set_blk(Jp, 3, self.PHI_ID, 1.0 * np.eye(3))
+        # set_blk(Jp, 3, self.PHI_ID, rot.transpose())
+        Epos = np.square(0.05 * np.eye(3))
+        Eatt = np.square(0.1 * np.eye(3))
+        Epos_inv = np.linalg.inv(Epos)
+        Eatt_inv = np.linalg.inv(Eatt)
+        # Epa_inv = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
+        Epa_inv = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
+        Epa = scipy.linalg.block_diag(Epos, Eatt)
+        # Epa = scipy.linalg.block_diag(Epos_inv)
+        # print("Epa = \n", Epa)
+        # print("Epa_inv = \n", Epa_inv)
+        sum_Ji += Jp.transpose() @ Epa_inv @ Jp
+        resid_pa = np.zeros(6)
+        resid_pa[:3] = pos - self._nav_curr.pos - self._nav_err.dpos
+        Rk_inv = np.linalg.inv(Rk)
+        dR_inv = np.linalg.inv(dR)
+        resid_pa[3:] = log_rot_mat(Rk_inv @ dR_inv @ rot)
+        # print("dR = ", dR)
+        # print("Rk = ", Rk)
+        # print("rotv = ", log_rot_mat(dR @ Rk @ rot.transpose()))
+        # resid_pa[3:] = log_rot_mat(dR @ Rk @ rot.transpose())
+        print("resid_pa = ", resid_pa)
+        sum_res += Jp.transpose() @ Epa_inv @ resid_pa
+        # print("sum_Ji + Pos = \n", sum_Ji)
+        # print("sum_res + Pos = \n", sum_res)
+
+        S = Jp @ self._cov @ Jp.transpose() + Epa
+        K = self._cov @ Jp.transpose() @ np.linalg.inv(S)
+        # print("S = \n", S)
+        # print("K = \n", K)
+        delta_x = K @ resid_pa
+
+        self._cov = (np.eye(self.STATE_RANK) - K @ Jp) @ self._cov
+
+        # self._cov = np.copy(self._cov_init)
+
+        # cov_inv = np.linalg.inv(self._cov)
+        # print("cov_inv = \n", cov_inv)
+        # H_plus_cov = np.linalg.inv(sum_Ji + cov_inv)
+        # print("H_plus_cov = \n", H_plus_cov)
+        # K_gain = H_plus_cov @ Ji.transpose() @ self._cov_scan_meas_inv
+        # print("K_gain = \n", K_gain)
+        # print("delta_x0 = \n", delta_x)
+        # delta_x = H_plus_cov @ sum_res
+
+        print("delta_x = \n", delta_x)
+
+        # self._cov = (np.eye(self.STATE_RANK) - H_plus_cov @ sum_Ji) @ self._cov
+
+        # print("H_plus_cov @ sum_Ji = \n", H_plus_cov @ sum_Ji)
+
+        # apply correction error-state
+        self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
+        self._nav_err.dvel += delta_x[self.VEL_ID:self.VEL_ID + 3]
+        self._nav_err.datt_v += delta_x[self.PHI_ID:self.PHI_ID + 3]
+        # self._nav_err.datt_v = log_rot_mat(
+        #     exp_rot_vec(delta_x[self.PHI_ID:self.PHI_ID + 3])
+        #     @ exp_rot_vec(self._nav_err.datt_v))
+        self._nav_err.dbias_gyr += delta_x[self.BG_ID:self.BG_ID + 3]
+        self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
+
+        print(f"_nav_err FINAL [POSE CORR] = \n", self._nav_err)
+
+        self._nav_curr.pos += self._nav_err.dpos
+        # self._nav_curr.pos = new_icp_pose[:3, 3]
+        self._nav_curr.vel += self._nav_err.dvel
+        self._nav_curr.att_h = self._nav_curr.att_h @ exp_rot_vec(self._nav_err.datt_v)
+        # self._nav_curr.att_h =  self._nav_curr.att_h @ exp_rot_vec(self._nav_err.datt_v)
+        # self._nav_curr.att_h = new_icp_pose[:3, :3]
+        self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
+        self._nav_curr.bias_acc += self._nav_err.dbias_acc
+
+
+        print("\n_nav_prev (pre POSE CORR UPDATED) = \n", self._nav_prev)
+        print("_nav_curr (POSE CORR UPDATED) = \n", self._nav_curr)
+        print("UPDATED COV:::::::::::::::::::::\n", self._cov)
+
+        self._reset_nav_err()
+
+        self._log_on_pose_corr(pose_corr)
+
+        self._nav_prev = deepcopy(self._nav_curr)
+
+        # input()
+
+    def _log_on_pose_corr(self, pose_corr: np.ndarray):
         store_nav = deepcopy(self._nav_curr)
         store_nav.cov = np.copy(self._cov)
         store_nav.update = True
@@ -983,11 +1270,7 @@ class LioEkf:
 
         assert len(self._navs) == len(self._navs_pred)
 
-        self._nav_prev = deepcopy(self._nav_curr)
-
         # self._cov = np.copy(self._cov_init)
-
-        # input()
 
     def deskew_scan(self, xyz: np.ndarray,
                     timestamps: np.ndarray,
@@ -1188,17 +1471,17 @@ class LioEkfScans(client.ScanSource):
 
                     if imu_idx % 10 == 0:
                         acc = npr.normal(0.0, 1.0, 3)
-                        acc[1] = 0
-                        acc[2] = 0
+                        # acc[1] = 0
+                        # acc[2] = 0
                         acc = acc - self._lio_ekf._g_fn
-                        # gyr = npr.normal(0.0, 1.0, 3)
-                        gyr = [0,0,0]
+                        gyr = npr.normal(0.0, 1.0, 3)
+                        # gyr = [0,0,0]
                         # gyr[0] = 0
                         # gyr[1] = 0
                         # gyr[2] = 0
-                        gyr = np.zeros(3)
+                        # gyr = np.zeros(3)
                         imu = IMU(acc, gyr, imu_idx * 0.01)
-                        imu_noisy = IMU(acc + np.array([0.9, -0.2, -0.4]), gyr, imu_idx * 0.01)
+                        imu_noisy = IMU(acc + np.array([0.9, -0.2, -0.4]), gyr + np.array([0.01, 0.03, -0.012]), imu_idx * 0.01)
                         print("IMU 0: ", imu)
                         print("IMU 1: ", imu_noisy)
                     else:
@@ -1214,13 +1497,13 @@ class LioEkfScans(client.ScanSource):
                     #     print("pose_corr = \n", pose_corr)
                     #     self._lio_ekf.processPoseCorrection(pose_corr)
 
-                    
 
-                    self._lio_ekf.processImu(deepcopy(imu_noisy))
-                    self._lio_ekf_corr.processImu(deepcopy(imu_noisy))
+
+                    self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
+                    self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
 
                     print("imu_to_gt = ", imu)
-                    self._lio_ekf_gt.processImu(deepcopy(imu))
+                    self._lio_ekf_gt.processImuAlt(deepcopy(imu))
 
                     if (imu_idx + 1) % 10 == 0:
                         # print(f"NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)

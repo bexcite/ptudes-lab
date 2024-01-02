@@ -1,5 +1,6 @@
 from typing import Optional
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from dataclasses import dataclass
 
@@ -33,7 +34,9 @@ class IMU:
 @dataclass
 class NavState:
     pos: np.ndarray = np.zeros(3)    # Vec3
-    att_h: np.ndarray = np.eye(3)    # Mat3x3, SO(3)
+    # att_v: np.ndarray = np.zeros(3)
+    att_q: np.ndarray = np.array([0, 0, 0, 1])  # Quat, xyzw
+    # att_h: np.ndarray = np.eye(3)    # Mat3x3, SO(3)
     vel: np.ndarray = np.zeros(3)    # Vec3
 
     bias_gyr: np.ndarray = np.zeros(3)  # Vec3
@@ -69,6 +72,22 @@ class NavState:
         pose[:3, :3] = self.att_h
         pose[:3, 3] = self.pos
         return pose
+    
+    @property
+    def att_h(self):
+        return Rotation.from_quat(self.att_q).as_matrix()
+    
+    @att_h.setter
+    def att_h(self, val: np.ndarray):
+        self.att_q = Rotation.from_matrix(val).as_quat()
+    
+    @property
+    def att_v(self):
+        return Rotation.from_quat(self.att_q).as_rotvec()
+    
+    @att_v.setter
+    def att_v(self, val: np.ndarray):
+        self.att_q = Rotation.from_rotvec(val).as_quat()
 
     def _formatted_str(self) -> str:
         sb = " (S)" if self.scan else ""
@@ -76,6 +95,7 @@ class NavState:
              f"  pos: {self.pos}\n"
              f"  vel: {self.vel}\n"
              f"  att_v: {log_rot_mat(self.att_h)}\n"
+             f"  att_v: {self.att_v}\n"
              f"  bg: {self.bias_gyr}\n"
              f"  ba: {self.bias_acc}\n")
         return s
