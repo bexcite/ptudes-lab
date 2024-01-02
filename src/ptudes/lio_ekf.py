@@ -113,7 +113,7 @@ class LioEkf:
         self._imu_intr_rot = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
         # self._g_fn = GRAV * np.array([0, 0, -1])
-        self._g_fn = GRAV * np.array([0, 0, 1])
+        self._g_fn = GRAV * np.array([0, 0, -1])
         # self._g_fn = GRAV * np.array([-0.00054619, 9.77265772, -0.81460648])
 
         self._initpos_std = np.diag([20.05, 20.05, 20.05])
@@ -342,7 +342,7 @@ class LioEkf:
 
         imu = IMU.from_packet(imu_packet, _intr_rot=self._imu_intr_rot)
         # imu.dt = imu.ts - self._imu_prev.ts
-        self.processImu(imu)
+        self.processImuAlt(imu)
 
 
     def processImu(self, imu: IMU) -> None:
@@ -475,7 +475,7 @@ class LioEkf:
                 dt * np.square(self._acc_vrw * np.eye(3)))
         set_blk(W, self.BG_ID, self.BG_ID,
                 dt * np.square(self._gyr_arw * np.eye(3)))
-        
+
 
         self._cov = Fx @ self._cov @ Fx.transpose() + W
 
@@ -1171,8 +1171,8 @@ class LioEkf:
         set_blk(Jp, 0, self.POS_ID, 1.0 * np.eye(3))
         set_blk(Jp, 3, self.PHI_ID, 1.0 * np.eye(3))
         # set_blk(Jp, 3, self.PHI_ID, rot.transpose())
-        Epos = np.square(0.05 * np.eye(3))
-        Eatt = np.square(0.1 * np.eye(3))
+        Epos = np.square(0.02 * np.eye(3))
+        Eatt = np.square(0.01 * np.eye(3))
         Epos_inv = np.linalg.inv(Epos)
         Eatt_inv = np.linalg.inv(Eatt)
         # Epa_inv = scipy.linalg.block_diag(Epos_inv, Eatt_inv)
@@ -1437,11 +1437,15 @@ class LioEkfScans(client.ScanSource):
 
                 if batch(packet, ls_write):
                     # new scan finished
-                    # if scan_idx >= self._start_scan:
-                    #     self._lio_ekf.processLidarScan(ls_write)
-                    #     print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
+                    if scan_idx >= self._start_scan:
+                        # self._lio_ekf.processLidarScan(ls_write)
+                        self._lio_ekf._kiss_icp.register_frame(ls_write)
+                        # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
+                        self._lio_ekf.processPoseCorrectionAlt(
+                            self._lio_ekf._kiss_icp.pose)
+                        print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
 
-                    # yield ls_write
+                    yield ls_write
 
                     if (self._end_scan is not None
                             and scan_idx >= self._end_scan):
@@ -1471,9 +1475,9 @@ class LioEkfScans(client.ScanSource):
 
                     # self._lio_ekf.processImu(imu)
 
-                    # self._lio_ekf.processImuPacket(packet)
+                    self._lio_ekf.processImuPacket(packet)
 
-                    imu = next(imu_it)
+                    # imu = next(imu_it)
 
 
                     # if imu_idx % 10 == 0:
@@ -1496,15 +1500,15 @@ class LioEkfScans(client.ScanSource):
                     #     imu_noisy.ts = imu_idx * 0.01
                     #     # input()
 
-                    if imu.ts > pose_ts:
-                        print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
-                        print("pose_corr = \n", pose_corr)
-                        self._lio_ekf.processPoseCorrectionAlt(pose_corr)
-                        pose_idx += 1
-                        pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
-                        pose_ts = gts[pose_idx][0]
-
-                    self._lio_ekf.processImuAlt(deepcopy(imu))
+                    # New College thing
+                    # if imu.ts > pose_ts:
+                    #     print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
+                    #     print("pose_corr = \n", pose_corr)
+                    #     self._lio_ekf.processPoseCorrectionAlt(pose_corr)
+                    #     pose_idx += 1
+                    #     pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
+                    #     pose_ts = gts[pose_idx][0]
+                    # self._lio_ekf.processImuAlt(deepcopy(imu))
 
                     # self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
                     # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
