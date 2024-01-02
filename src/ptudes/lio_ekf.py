@@ -1236,11 +1236,20 @@ class LioEkf:
         self._nav_curr.pos += self._nav_err.dpos
         # self._nav_curr.pos = new_icp_pose[:3, 3]
         self._nav_curr.vel += self._nav_err.dvel
+        # rot_att = Rotation.from_rotvec(self._nav_err.datt_v) * Rotation.from_quat(self._nav_curr.att_q)
+        # # # self._nav_curr.att_h = exp_rot_vec(self._nav_err.datt_v) @ self._nav_curr.att_h
+        # q = rot_att.as_quat()
+        # self._nav_curr.att_q = q #  / np.linalg.norm(q)
         self._nav_curr.att_h = self._nav_curr.att_h @ exp_rot_vec(self._nav_err.datt_v)
         # self._nav_curr.att_h =  self._nav_curr.att_h @ exp_rot_vec(self._nav_err.datt_v)
         # self._nav_curr.att_h = new_icp_pose[:3, :3]
         self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
         self._nav_curr.bias_acc += self._nav_err.dbias_acc
+
+
+        G_theta = np.eye(3) - vee(0.5 * self._nav_err.datt_v)
+        phi_block = blk(self._cov, self.PHI_ID, self.PHI_ID, 3)
+        set_blk(self._cov, self.PHI_ID, self.PHI_ID, G_theta @ phi_block @ G_theta.transpose())
 
 
         print("\n_nav_prev (pre POSE CORR UPDATED) = \n", self._nav_prev)
@@ -1464,8 +1473,6 @@ class LioEkfScans(client.ScanSource):
 
                     # self._lio_ekf.processImuPacket(packet)
 
-
-
                     # imu = next(imu_it)
 
 
@@ -1509,7 +1516,7 @@ class LioEkfScans(client.ScanSource):
                         # print(f"NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
                         # print(f"NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
                         # print(f"NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
-                        self._lio_ekf_corr.processPoseCorrection(
+                        self._lio_ekf_corr.processPoseCorrectionAlt(
                             self._lio_ekf_gt._nav_curr.pose_mat())
                         # print(f"0NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
                         # print(f"0NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
