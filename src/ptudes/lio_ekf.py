@@ -113,7 +113,7 @@ class LioEkf:
         self._imu_intr_rot = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
         # self._g_fn = GRAV * np.array([0, 0, -1])
-        self._g_fn = GRAV * np.array([0, 0, -1])
+        self._g_fn = GRAV * np.array([0, 0, 1])
         # self._g_fn = GRAV * np.array([-0.00054619, 9.77265772, -0.81460648])
 
         self._initpos_std = np.diag([20.05, 20.05, 20.05])
@@ -1412,7 +1412,7 @@ class LioEkfScans(client.ScanSource):
         #     print(f"dt[{idx}] = ", gts[0][0] - im.ts)
         pose_idx = 1
         imu_it = iter(imu_source)
-        pose_corr = gts[pose_idx][1]
+        pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
         pose_ts = gts[pose_idx][0]
 
         # print("dts = ", imus[0].ts, gts[0][0], gts[0][0] - imus[0].ts)
@@ -1473,55 +1473,55 @@ class LioEkfScans(client.ScanSource):
 
                     # self._lio_ekf.processImuPacket(packet)
 
-                    # imu = next(imu_it)
+                    imu = next(imu_it)
 
 
-                    if imu_idx % 10 == 0:
-                        acc = npr.normal(0.0, 1.0, 3)
-                        # acc[1] = 0
-                        # acc[2] = 0
-                        acc = acc - self._lio_ekf._g_fn
-                        gyr = npr.normal(0.0, 1.0, 3)
-                        # gyr = [0,0,0]
-                        # gyr[0] = 0
-                        # gyr[1] = 0
-                        # gyr[2] = 0
-                        # gyr = np.zeros(3)
-                        imu = IMU(acc, gyr, imu_idx * 0.01)
-                        imu_noisy = IMU(acc + np.array([0.9, -0.2, -0.4]), gyr + np.array([0.01, 0.03, -0.012]), imu_idx * 0.01)
-                        print("IMU 0: ", imu)
-                        print("IMU 1: ", imu_noisy)
-                    else:
-                        imu.ts = imu_idx * 0.01
-                        imu_noisy.ts = imu_idx * 0.01
-                        # input()
+                    # if imu_idx % 10 == 0:
+                    #     acc = npr.normal(0.0, 1.0, 3)
+                    #     # acc[1] = 0
+                    #     # acc[2] = 0
+                    #     acc = acc - self._lio_ekf._g_fn
+                    #     gyr = npr.normal(0.0, 1.0, 3)
+                    #     # gyr = [0,0,0]
+                    #     # gyr[0] = 0
+                    #     # gyr[1] = 0
+                    #     # gyr[2] = 0
+                    #     # gyr = np.zeros(3)
+                    #     imu = IMU(acc, gyr, imu_idx * 0.01)
+                    #     imu_noisy = IMU(acc + np.array([0.9, -0.2, -0.4]), gyr + np.array([0.01, 0.03, -0.012]), imu_idx * 0.01)
+                    #     print("IMU 0: ", imu)
+                    #     print("IMU 1: ", imu_noisy)
+                    # else:
+                    #     imu.ts = imu_idx * 0.01
+                    #     imu_noisy.ts = imu_idx * 0.01
+                    #     # input()
 
-                    # if imu.ts > pose_ts:
-                    #     print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
-                    #     pose_idx += 1
-                    #     pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
-                    #     pose_ts = gts[pose_idx][0]
-                    #     print("pose_corr = \n", pose_corr)
-                    #     self._lio_ekf.processPoseCorrection(pose_corr)
+                    if imu.ts > pose_ts:
+                        print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
+                        print("pose_corr = \n", pose_corr)
+                        self._lio_ekf.processPoseCorrectionAlt(pose_corr)
+                        pose_idx += 1
+                        pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
+                        pose_ts = gts[pose_idx][0]
 
+                    self._lio_ekf.processImuAlt(deepcopy(imu))
 
+                    # self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
+                    # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
 
-                    self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
-                    self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
+                    # print("imu_to_gt = ", imu)
+                    # self._lio_ekf_gt.processImuAlt(deepcopy(imu))
 
-                    print("imu_to_gt = ", imu)
-                    self._lio_ekf_gt.processImuAlt(deepcopy(imu))
-
-                    if (imu_idx + 1) % 10 == 0:
-                        # print(f"NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
-                        # print(f"NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
-                        # print(f"NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
-                        self._lio_ekf_corr.processPoseCorrectionAlt(
-                            self._lio_ekf_gt._nav_curr.pose_mat())
-                        # print(f"0NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
-                        # print(f"0NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
-                        # print(f"0NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
-                        # input()
+                    # if (imu_idx + 1) % 10 == 0:
+                    #     # print(f"NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
+                    #     # print(f"NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
+                    #     # print(f"NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
+                    #     self._lio_ekf_corr.processPoseCorrectionAlt(
+                    #         self._lio_ekf_gt._nav_curr.pose_mat())
+                    #     # print(f"0NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
+                    #     # print(f"0NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
+                    #     # print(f"0NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
+                    #     # input()
 
                     # print(f"GYR xyz[len: {imu_idx}]:\n")
                     # for i in range(len(self._lio_ekf._lg_gyr)):
@@ -1544,16 +1544,17 @@ class LioEkfScans(client.ScanSource):
         print("NAV_CURR CORR = ", self._lio_ekf_corr._nav_curr)
 
         if self._plotting == "graphs":
-            lio_ekf_graphs(self._lio_ekf_corr)
+            lio_ekf_graphs(self._lio_ekf)
+            # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr, self._lio_ekf)
+
             # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
-            lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr, self._lio_ekf)
             # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr)
             # lio_ekf_graphs(self._lio_ekf_gt)
             # lio_ekf_graphs(self._lio_ekf)
         elif self._plotting == "point_viz":
-            lio_ekf_viz(self._lio_ekf_gt)
+            # lio_ekf_viz(self._lio_ekf_gt)
             lio_ekf_viz(self._lio_ekf)
-            lio_ekf_viz(self._lio_ekf_corr)
+            # lio_ekf_viz(self._lio_ekf_corr)
         else:
             print(f"WARNING: plotting param '{self._plotting}' doesn't "
                   f"supported")
