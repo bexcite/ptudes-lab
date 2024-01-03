@@ -265,8 +265,8 @@ def lio_ekf_graphs(lio_ekf):
     axZ.grid(True)
     axZ.set_xlabel('t')
 
-    for a in ax + [axX, axY, axZ]:
-        a.plot(scan_t, np.zeros_like(scan_t), '8r')
+    # for a in ax + [axX, axY, axZ]:
+    #     a.plot(scan_t, np.zeros_like(scan_t), '8r')
 
     plt.show()
 

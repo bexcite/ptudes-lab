@@ -93,7 +93,10 @@ class LioEkf:
     BG_ID = 9
     BA_ID = 12
 
-    def __init__(self, metadata: SensorInfo):
+    def __init__(self,
+                 metadata: SensorInfo,
+                 *,
+                 init_gravity: np.ndarray = GRAV * np.array([0, 0, 1])):
 
         np.set_printoptions(precision=3, linewidth=180)
 
@@ -112,8 +115,9 @@ class LioEkf:
         # self._imu_intr_rot = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
         self._imu_intr_rot = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
+        self._g_fn = init_gravity
         # self._g_fn = GRAV * np.array([0, 0, -1])
-        self._g_fn = GRAV * np.array([0, 0, -1])
+        # self._g_fn = GRAV * np.array([0, 0, 1])
         # self._g_fn = GRAV * np.array([-0.00054619, 9.77265772, -0.81460648])
 
         self._initpos_std = np.diag([20.05, 20.05, 20.05])
@@ -1275,7 +1279,7 @@ class LioEkf:
         self._navs += [store_nav]
         self._navs_t += [self._imu_curr.ts]
         self._nav_scan_idxs += [len(self._navs) - 1]
-        print("self._nav_scan_idxs = ", self._nav_scan_idxs)
+        # print("self._nav_scan_idxs = ", self._nav_scan_idxs)
 
         assert len(self._navs) == len(self._navs_pred)
 
@@ -1376,7 +1380,8 @@ class LioEkfScans(client.ScanSource):
         self._fields = (fields if fields is not None else
                         self._source.metadata.format.udp_profile_lidar)
 
-        self._lio_ekf = LioEkf(source.metadata)
+        self._lio_ekf = LioEkf(source.metadata,
+                               init_gravity=GRAV * np.array([0, 0, 1]))
 
         self._lio_ekf_gt = LioEkf(source.metadata)
         self._lio_ekf_corr = LioEkf(source.metadata)
@@ -1403,6 +1408,9 @@ class LioEkfScans(client.ScanSource):
         print("end_scan = ", self._end_scan)
 
         bag_file = "/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/2021-07-01-10-37-38-quad-easy.bag"
+        # bag_file = "/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/2021-07-01-11-31-35_0-quad-medium.bag"
+        # bag_file="/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/2021-07-01-10-40-50_0-stairs.bag"
+        # bag_file = "/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/2021-07-01-11-35-14_0-quad-hard.bag"
         from ptudes.bag import IMUBagSource
         imu_source = IMUBagSource(bag_file, imu_topic="/alphasense_driver_ros/imu")
         gts = read_newer_college_gt("/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/ground_truth/gt-nc-quad-easy.csv")
@@ -1437,15 +1445,15 @@ class LioEkfScans(client.ScanSource):
 
                 if batch(packet, ls_write):
                     # new scan finished
-                    if scan_idx >= self._start_scan:
-                        # self._lio_ekf.processLidarScan(ls_write)
-                        self._lio_ekf._kiss_icp.register_frame(ls_write)
-                        # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
-                        self._lio_ekf.processPoseCorrectionAlt(
-                            self._lio_ekf._kiss_icp.pose)
-                        print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
+                    # if scan_idx >= self._start_scan:
+                    #     # self._lio_ekf.processLidarScan(ls_write)
+                    #     self._lio_ekf._kiss_icp.register_frame(ls_write)
+                    #     # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
+                    #     self._lio_ekf.processPoseCorrectionAlt(
+                    #         self._lio_ekf._kiss_icp.pose)
+                    #     print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
 
-                    yield ls_write
+                    # yield ls_write
 
                     if (self._end_scan is not None
                             and scan_idx >= self._end_scan):
@@ -1475,15 +1483,16 @@ class LioEkfScans(client.ScanSource):
 
                     # self._lio_ekf.processImu(imu)
 
-                    self._lio_ekf.processImuPacket(packet)
-
-                    # imu = next(imu_it)
+                    # self._lio_ekf.processImuPacket(packet)
 
 
+                    # Sim IMU meas
                     # if imu_idx % 10 == 0:
                     #     acc = npr.normal(0.0, 1.0, 3)
                     #     # acc[1] = 0
                     #     # acc[2] = 0
+                    #     print("acc = ", acc)
+                    #     print("g_fn = ", self._lio_ekf._g_fn)
                     #     acc = acc - self._lio_ekf._g_fn
                     #     gyr = npr.normal(0.0, 1.0, 3)
                     #     # gyr = [0,0,0]
@@ -1500,32 +1509,26 @@ class LioEkfScans(client.ScanSource):
                     #     imu_noisy.ts = imu_idx * 0.01
                     #     # input()
 
-                    # New College thing
-                    # if imu.ts > pose_ts:
-                    #     print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
-                    #     print("pose_corr = \n", pose_corr)
-                    #     self._lio_ekf.processPoseCorrectionAlt(pose_corr)
-                    #     pose_idx += 1
-                    #     pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
-                    #     pose_ts = gts[pose_idx][0]
-                    # self._lio_ekf.processImuAlt(deepcopy(imu))
-
                     # self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
-                    # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
-
-                    # print("imu_to_gt = ", imu)
+                    # # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
                     # self._lio_ekf_gt.processImuAlt(deepcopy(imu))
 
                     # if (imu_idx + 1) % 10 == 0:
-                    #     # print(f"NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
-                    #     # print(f"NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
-                    #     # print(f"NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
-                    #     self._lio_ekf_corr.processPoseCorrectionAlt(
+                    #     # self._lio_ekf_corr.processPoseCorrectionAlt(
+                    #     #     self._lio_ekf_gt._nav_curr.pose_mat())
+                    #     self._lio_ekf.processPoseCorrectionAlt(
                     #         self._lio_ekf_gt._nav_curr.pose_mat())
-                    #     # print(f"0NAV_CURR_GT[{imu_idx}] = ", self._lio_ekf_gt._nav_curr)
-                    #     # print(f"0NAV_CURR[{imu_idx}] = ", self._lio_ekf._nav_curr)
-                    #     # print(f"0NAV_CURR CORR[{imu_idx}] = ", self._lio_ekf_corr._nav_curr)
-                    #     # input()
+
+                    # New College thing
+                    imu = next(imu_it)
+                    if imu.ts > pose_ts:
+                        print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
+                        print("pose_corr = \n", pose_corr)
+                        self._lio_ekf.processPoseCorrectionAlt(pose_corr)
+                        pose_idx += 1
+                        pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
+                        pose_ts = gts[pose_idx][0]
+                    self._lio_ekf.processImuAlt(deepcopy(imu))
 
                     # print(f"GYR xyz[len: {imu_idx}]:\n")
                     # for i in range(len(self._lio_ekf._lg_gyr)):
@@ -1549,6 +1552,7 @@ class LioEkfScans(client.ScanSource):
 
         if self._plotting == "graphs":
             lio_ekf_graphs(self._lio_ekf)
+            # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
             # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr, self._lio_ekf)
 
             # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
