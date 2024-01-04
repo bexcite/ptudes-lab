@@ -598,7 +598,6 @@ def lio_ekf_viz(lio_ekf):
             sample_axis[idx].pose = ax_pose
             sample_axis[idx].enable()
 
-    print(f"{lio_ekf._nav_scan_idxs = }")
     target_id = 0
     target_idx = lio_ekf._nav_scan_idxs[target_id]
 

@@ -1295,7 +1295,7 @@ class LioEkfScans(client.ScanSource):
                         self._source.metadata.format.udp_profile_lidar)
 
         self._lio_ekf = LioEkf(source.metadata,
-                               init_gravity=GRAV * np.array([0, 0, 1]))
+                               init_gravity=GRAV * np.array([0, 0, -1]))
 
         self._lio_ekf_gt = LioEkf(source.metadata,
                                   init_gravity=GRAV * np.array([0, 0, 1]))
@@ -1403,6 +1403,7 @@ class LioEkfScans(client.ScanSource):
 
 
                     # Sim IMU meas
+                    # dt = 0.01
                     # if imu_idx % 10 == 0:
                     #     acc = npr.normal(0.0, 1.5, 3)
                     #     # acc[1] = 0
@@ -1416,27 +1417,27 @@ class LioEkfScans(client.ScanSource):
                     #     # gyr[1] = 0
                     #     # gyr[2] = 0
                     #     # gyr = np.zeros(3)
-                    #     imu = IMU(acc, gyr, imu_idx * 0.01)
+                    #     imu = IMU(acc, gyr, imu_idx * dt)
                         
                     #     # add noise and biases
                     #     acc_noise = npr.normal(0.0, 0.4, 3)
                     #     # acc_noise = np.zeros(3)
                     #     acc_bias = np.array([0.9, -0.2, -0.4])
-                    #     gyr_noise = npr.normal(0.0, 0.1, 3)
+                    #     gyr_noise = npr.normal(0.0, 2.1, 3)
                     #     # gyr_noise = np.zeros(3)
                     #     gyr_bias = np.array([0.01, 0.03, -0.012])
                     #     imu_noisy = IMU(acc + acc_noise + acc_bias,
                     #                     gyr + gyr_noise + gyr_bias,
-                    #                     imu_idx * 0.01)
+                    #                     imu_idx * dt)
                     #     print("IMU 0: ", imu)
                     #     print("IMU 1: ", imu_noisy)
                     # else:
-                    #     imu.ts = imu_idx * 0.01
-                    #     imu_noisy.ts = imu_idx * 0.01
+                    #     imu.ts = imu_idx * dt
+                    #     imu_noisy.ts = imu_idx * dt
                     #     # input()
 
                     # self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
-                    # # # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
+                    # # # # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
                     # self._lio_ekf_gt.processImuAlt(deepcopy(imu))
 
                     # if (imu_idx + 1) % 10 == 0:
