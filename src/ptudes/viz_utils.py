@@ -598,17 +598,20 @@ def lio_ekf_viz(lio_ekf):
             sample_axis[idx].pose = ax_pose
             sample_axis[idx].enable()
 
-    target_idx = next_scan_based_nav(lio_ekf._navs, start_idx=0)
+    print(f"{lio_ekf._nav_scan_idxs = }")
+    target_id = 0
+    target_idx = lio_ekf._nav_scan_idxs[target_id]
 
     set_cloud_from_idx(target_idx)
 
     def handle_keys(ctx, key, mods) -> bool:
-        nonlocal target_idx, sample_axis
+        nonlocal target_idx, target_id, sample_axis
         if key == 32:
             if target_idx in clouds:
                 clouds[target_idx].disable()
-            target_idx = next_scan_based_nav(lio_ekf._navs,
-                                             start_idx=target_idx + 1)
+            target_id = (target_id + 1) % len(lio_ekf._nav_scan_idxs)
+            target_idx = lio_ekf._nav_scan_idxs[target_id]
+            
             target_nav = lio_ekf._navs[target_idx]
             print(f"TNAV[{target_idx}]: ", target_nav)
             # point_viz.camera.set_target(
