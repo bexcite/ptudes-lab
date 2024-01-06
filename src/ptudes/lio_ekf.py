@@ -62,13 +62,16 @@ class NavErrState:
     dbias_gyr: np.ndarray = np.zeros(3) # Vec3
     dbias_acc: np.ndarray = np.zeros(3) # Vec3
 
+    dgrav: np.ndarray = np.zeros(3)
+
     def _formatted_str(self) -> str:
         s = (f"NavStateError:\n"
              f"  dpos: {self.dpos}\n"
              f"  dvel: {self.dvel}\n"
              f"  datt_v: {self.datt_v}\n"
              f"  dbias_gyr: {self.dbias_gyr}\n"
-             f"  dbias_acc: {self.dbias_acc}\n")
+             f"  dbias_acc: {self.dbias_acc}\n"
+             f"  dgrav: {self.dgrav}\n")
         return s
 
     def __repr__(self) -> str:
@@ -86,12 +89,13 @@ def vee(vec: np.ndarray) -> np.ndarray:
 
 class LioEkf:
 
-    STATE_RANK = 15
+    STATE_RANK = 18
     POS_ID = 0
     VEL_ID = 3
     PHI_ID = 6
     BG_ID = 9
     BA_ID = 12
+    G_ID = 15
 
     def __init__(self,
                  metadata: SensorInfo,
@@ -127,6 +131,8 @@ class LioEkf:
         # self._initba_std = np.diag([5.0, 5.0, 5.0])
         self._initbg_std = np.diag([1.5, 1.5, 1.5])
         self._initba_std = np.diag([0.5, 0.5, 0.5])
+
+        self._initg_std = np.diag([2.5, 2.5, 2.5])
 
 
         self._initba = np.zeros(3)
@@ -179,6 +185,8 @@ class LioEkf:
                 np.square(self._initbg_std * np.eye(3)))
         set_blk(self._cov, self.BA_ID, self.BA_ID,
                 np.square(self._initba_std * np.eye(3)))
+        set_blk(self._cov, self.G_ID, self.G_ID,
+                np.square(self._initg_std * np.eye(3)))
 
         self._cov_init = np.copy(self._cov)
 
@@ -205,6 +213,7 @@ class LioEkf:
         self._scan_idx = 0
 
         self._nav_curr = NavState()
+        self._nav_curr.grav = init_gravity
 
         # total_imu: accel =  [-0.93531433  0.36841277  0.23654302]
         # total_imu: avel  =  [ 1.26553045 -0.25072862 -2.18688865]
@@ -267,9 +276,11 @@ class LioEkf:
         # self._nav_curr.bias_acc = np.zeros(3)
         self._nav_curr.bias_gyr = self._initbg
         self._nav_curr.bias_acc = self._initba
+        self._nav_curr.grav = self._g_fn
         self._nav_prev = deepcopy(self._nav_curr)
         self._cov = np.copy(self._cov_init)
         print("------ RESET --- NAV -----")
+        print(f"{self._initbg = }")
 
     def _reset_nav_err(self):
         self._nav_err.dpos = np.zeros(3)
@@ -277,6 +288,7 @@ class LioEkf:
         self._nav_err.datt_v = np.zeros(3)
         self._nav_err.dbias_gyr = np.zeros(3)
         self._nav_err.dbias_acc = np.zeros(3)
+        self._nav_err.dgrav = np.zeros(3)
         print("------ RESET --- NAV -- ERR-----")
 
     def _insMech(self):
@@ -470,6 +482,7 @@ class LioEkf:
         set_blk(Fx, self.POS_ID, self.VEL_ID, dt * np.eye(3))
         set_blk(Fx, self.VEL_ID, self.PHI_ID, - dt * self._nav_prev.att_h @ vee(acc_body) )
         set_blk(Fx, self.VEL_ID, self.BA_ID, - dt * self._nav_prev.att_h )
+        # set_blk(Fx, self.VEL_ID, self.G_ID, dt * np.eye(3))
         set_blk(Fx, self.PHI_ID, self.PHI_ID, rot_dtheta.transpose())
         set_blk(Fx, self.PHI_ID, self.BG_ID, - dt * np.eye(3))
 
@@ -514,9 +527,9 @@ class LioEkf:
         rot_dtheta = Rotation.from_rotvec(dtheta).as_matrix()
 
         self._nav_curr.pos = self._nav_curr.pos + self._nav_curr.vel * dt + 0.5 * (
-            imu_curr_lacc_g + self._g_fn) * dt * dt
+            imu_curr_lacc_g + self._nav_curr.grav) * dt * dt
         self._nav_curr.vel = self._nav_curr.vel + (imu_curr_lacc_g +
-                                                   self._g_fn) * dt
+                                                   self._nav_curr.grav) * dt
         self._nav_curr.att_h = self._nav_curr.att_h @ rot_dtheta
 
 
@@ -1148,6 +1161,7 @@ class LioEkf:
         #     @ exp_rot_vec(self._nav_err.datt_v))
         self._nav_err.dbias_gyr += delta_x[self.BG_ID:self.BG_ID + 3]
         self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
+        self._nav_err.dgrav += delta_x[self.G_ID:self.G_ID + 3]
 
         print(f"_nav_err FINAL [POSE CORR] = \n", self._nav_err)
 
@@ -1163,6 +1177,7 @@ class LioEkf:
         # self._nav_curr.att_h = new_icp_pose[:3, :3]
         self._nav_curr.bias_gyr += self._nav_err.dbias_gyr
         self._nav_curr.bias_acc += self._nav_err.dbias_acc
+        self._nav_curr.grav += self._nav_err.dgrav
 
 
         G_theta = np.eye(3) - vee(0.5 * self._nav_err.datt_v)
@@ -1295,10 +1310,11 @@ class LioEkfScans(client.ScanSource):
                         self._source.metadata.format.udp_profile_lidar)
 
         self._lio_ekf = LioEkf(source.metadata,
-                               init_gravity=GRAV * np.array([0, 0, -1]))
+                               init_gravity=GRAV * np.array([0, 0, 1]))
 
         self._lio_ekf_gt = LioEkf(source.metadata,
-                                  init_gravity=GRAV * np.array([0, 0, 1]))
+                                  init_gravity=GRAV * np.array([0, 0, -1]))
+
         self._lio_ekf_corr = LioEkf(source.metadata,
                                     init_gravity=GRAV * np.array([0, 0, 1]))
 
@@ -1329,7 +1345,12 @@ class LioEkfScans(client.ScanSource):
         bag_file = "/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/2021-07-01-11-35-14_0-quad-hard.bag"
         from ptudes.bag import IMUBagSource
         imu_source = IMUBagSource(bag_file, imu_topic="/alphasense_driver_ros/imu")
-        gts = read_newer_college_gt("/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/ground_truth/gt-nc-quad-easy.csv")
+        # gts = read_newer_college_gt("/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/ground_truth/gt-nc-quad-easy.csv")
+        # gts = read_newer_college_gt("/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/ground_truth/gt-nc-quad-medium.csv")
+        # gts = read_newer_college_gt("/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/ground_truth/gt-nc-stairs.csv")
+        gts = read_newer_college_gt("/home/pavlo/data/newer-college/2021-ouster-os0-128-alphasense/collection 1 - newer college/ground_truth/gt-nc-quad-hard.csv")
+        print("GT LEN = ", len(gts))
+        # input()
         gt_ts = gts[0][0]
         gt_pose = gts[0][1]
         # for idx, im in enumerate(imus):
@@ -1361,15 +1382,15 @@ class LioEkfScans(client.ScanSource):
 
                 if batch(packet, ls_write):
                     # new scan finished
-                    if scan_idx >= self._start_scan:
-                        # self._lio_ekf.processLidarScan(ls_write)
-                        self._lio_ekf._kiss_icp.register_frame(ls_write)
-                        # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
-                        self._lio_ekf.processPoseCorrectionAlt(
-                            self._lio_ekf._kiss_icp.pose)
-                        print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
+                    # if scan_idx >= self._start_scan:
+                    #     # self._lio_ekf.processLidarScan(ls_write)
+                    #     self._lio_ekf._kiss_icp.register_frame(ls_write)
+                    #     # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
+                    #     self._lio_ekf.processPoseCorrectionAlt(
+                    #         self._lio_ekf._kiss_icp.pose)
+                    #     print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
 
-                    yield ls_write
+                    # yield ls_write
 
                     if (self._end_scan is not None
                             and scan_idx >= self._end_scan):
@@ -1399,7 +1420,7 @@ class LioEkfScans(client.ScanSource):
 
                     # self._lio_ekf.processImu(imu)
 
-                    self._lio_ekf.processImuPacket(packet)
+                    # self._lio_ekf.processImuPacket(packet)
 
 
                     # Sim IMU meas
@@ -1409,8 +1430,8 @@ class LioEkfScans(client.ScanSource):
                     #     # acc[1] = 0
                     #     # acc[2] = 0
                     #     print("acc = ", acc)
-                    #     print("g_fn = ", self._lio_ekf._g_fn)
-                    #     acc = acc - self._lio_ekf._g_fn
+                    #     # print("g_fn = ", self._lio_ekf._g_fn)
+                    #     acc = acc + GRAV * np.array([0, 0, 1])
                     #     gyr = npr.normal(0.0, 5.0, 3)
                     #     # gyr = [0,0,0]
                     #     # gyr[0] = 0
@@ -1418,7 +1439,7 @@ class LioEkfScans(client.ScanSource):
                     #     # gyr[2] = 0
                     #     # gyr = np.zeros(3)
                     #     imu = IMU(acc, gyr, imu_idx * dt)
-                        
+
                     #     # add noise and biases
                     #     acc_noise = npr.normal(0.0, 0.4, 3)
                     #     # acc_noise = np.zeros(3)
@@ -1447,15 +1468,15 @@ class LioEkfScans(client.ScanSource):
                     #         self._lio_ekf_gt._nav_curr.pose_mat())
 
                     # New College thing
-                    # imu = next(imu_it)
-                    # if imu.ts > pose_ts:
-                    #     print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
-                    #     print("pose_corr = \n", pose_corr)
-                    #     self._lio_ekf.processPoseCorrectionAlt(pose_corr)
-                    #     pose_idx += 1
-                    #     pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
-                    #     pose_ts = gts[pose_idx][0]
-                    # self._lio_ekf.processImuAlt(deepcopy(imu))
+                    imu = next(imu_it)
+                    if imu.ts > pose_ts:
+                        print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
+                        print("pose_corr = \n", pose_corr)
+                        self._lio_ekf.processPoseCorrectionAlt(pose_corr)
+                        pose_idx += 1
+                        pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
+                        pose_ts = gts[pose_idx][0]
+                    self._lio_ekf.processImuAlt(deepcopy(imu))
 
                     # print(f"GYR xyz[len: {imu_idx}]:\n")
                     # for i in range(len(self._lio_ekf._lg_gyr)):
@@ -1473,9 +1494,9 @@ class LioEkfScans(client.ScanSource):
               f"scan_idx = {scan_idx}, "
               f"scans_num = {self._lio_ekf._scan_idx}")
 
-        print("NAV_CURR_GT = ", self._lio_ekf_gt._nav_curr)
+        # print("NAV_CURR_GT = ", self._lio_ekf_gt._nav_curr)
         print("NAV_CURR = ", self._lio_ekf._nav_curr)
-        print("NAV_CURR CORR = ", self._lio_ekf_corr._nav_curr)
+        # print("NAV_CURR CORR = ", self._lio_ekf_corr._nav_curr)
 
         print("imus stats: ")
         imu_stats = self._lio_ekf._get_imu_stats()

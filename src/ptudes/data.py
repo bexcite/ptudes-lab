@@ -42,6 +42,8 @@ class NavState:
     bias_gyr: np.ndarray = np.zeros(3)  # Vec3
     bias_acc: np.ndarray = np.zeros(3) # Vec3
 
+    grav: np.ndarray = GRAV * np.array([0, 0, -1])
+
     update: bool = False
 
     # NavStateLog for viz/debug parts
@@ -97,7 +99,8 @@ class NavState:
              f"  att_v: {log_rot_mat(self.att_h)}\n"
              f"  att_v: {self.att_v}\n"
              f"  bg: {self.bias_gyr}\n"
-             f"  ba: {self.bias_acc}\n")
+             f"  ba: {self.bias_acc}\n"
+             f"  grav: {self.grav}\n")
         return s
 
     def __repr__(self) -> str:
