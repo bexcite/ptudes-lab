@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from rosbags.highlevel import AnyReader
 
-from ptudes.data import IMU
+from ptudes.ins.data import IMU
 
 import ouster.client as client
 

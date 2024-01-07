@@ -22,14 +22,14 @@ from kiss_icp.registration import register_frame
 import matplotlib.pyplot as plt
 
 from ptudes.kiss import KissICPWrapper
-from ptudes.data import GRAV, IMU, NavState, set_blk, blk
+from ptudes.ins.data import GRAV, IMU, NavState, set_blk, blk
 
-from ptudes.utils import read_newer_college_gt
+from ptudes.utils import read_newer_college_gt, vee
 
-from ptudes.viz_utils import lio_ekf_graphs, lio_ekf_error_graphs, lio_ekf_viz
+from ptudes.ins.viz_utils import (lio_ekf_graphs, lio_ekf_error_graphs,
+                                  lio_ekf_viz)
 
-from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
-                              GREY_COLOR1, WHITE_COLOR)
+from ptudes.ins.es_ekf import ESEKF
 
 from dataclasses import dataclass
 
@@ -77,16 +77,6 @@ class NavErrState:
     def __repr__(self) -> str:
         return self._formatted_str()
 
-def vee(vec: np.ndarray) -> np.ndarray:
-    w = np.zeros((3, 3))
-    w[0, 1] = -vec[2]
-    w[0, 2] = vec[1]
-    w[1, 0] = vec[2]
-    w[1, 2] = -vec[0]
-    w[2, 0] = -vec[1]
-    w[2, 1] = vec[0]
-    return w
-
 class LioEkf:
 
     STATE_RANK = 18
@@ -126,7 +116,14 @@ class LioEkf:
 
         self._initpos_std = np.diag([20.05, 20.05, 20.05])
         self._initvel_std = np.diag([5.05, 5.05, 5.05])
-        self._initatt_std = DEG2RAD * np.diag([45.0, 45.0, 45.5])
+
+
+        initatt_rpy_deg = np.array([15.0, 15.0, 15.5])
+        initatt_rotvec = Rotation.from_euler('XYZ', initatt_rpy_deg,
+                                      degrees=True).as_rotvec()
+        self._initatt_std = np.diag(initatt_rotvec)
+        # self._initatt_std = DEG2RAD * np.diag([45.0, 45.0, 45.5])
+
         # self._initbg_std = np.diag([1.0, 1.0, 1.0])
         # self._initba_std = np.diag([5.0, 5.0, 5.0])
         self._initbg_std = np.diag([1.5, 1.5, 1.5])
@@ -1310,7 +1307,9 @@ class LioEkfScans(client.ScanSource):
                         self._source.metadata.format.udp_profile_lidar)
 
         self._lio_ekf = LioEkf(source.metadata,
-                               init_gravity=GRAV * np.array([0, 0, 1]))
+                               init_gravity=GRAV * np.array([0, 0, -1]))
+
+        self._es_ekf = ESEKF(init_grav=GRAV * np.array([0, 0, -1]))
 
         self._lio_ekf_gt = LioEkf(source.metadata,
                                   init_gravity=GRAV * np.array([0, 0, -1]))
@@ -1382,15 +1381,17 @@ class LioEkfScans(client.ScanSource):
 
                 if batch(packet, ls_write):
                     # new scan finished
-                    # if scan_idx >= self._start_scan:
-                    #     # self._lio_ekf.processLidarScan(ls_write)
-                    #     self._lio_ekf._kiss_icp.register_frame(ls_write)
-                    #     # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
-                    #     self._lio_ekf.processPoseCorrectionAlt(
-                    #         self._lio_ekf._kiss_icp.pose)
-                    #     print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
+                    if scan_idx >= self._start_scan:
+                        # self._lio_ekf.processLidarScan(ls_write)
+                        self._lio_ekf._kiss_icp.register_frame(ls_write)
+                        # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
+                        self._lio_ekf.processPoseCorrectionAlt(
+                            self._lio_ekf._kiss_icp.pose)
+                        self._es_ekf.processPose(
+                            self._lio_ekf._kiss_icp.pose)
+                        print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
 
-                    # yield ls_write
+                    yield ls_write
 
                     if (self._end_scan is not None
                             and scan_idx >= self._end_scan):
@@ -1420,7 +1421,8 @@ class LioEkfScans(client.ScanSource):
 
                     # self._lio_ekf.processImu(imu)
 
-                    # self._lio_ekf.processImuPacket(packet)
+                    self._lio_ekf.processImuPacket(packet)
+                    self._es_ekf.processImu(IMU.from_packet(packet))
 
 
                     # Sim IMU meas
@@ -1458,6 +1460,7 @@ class LioEkfScans(client.ScanSource):
                     #     # input()
 
                     # self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
+                    # self._es_ekf.processImu(deepcopy(imu_noisy))
                     # # # # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
                     # self._lio_ekf_gt.processImuAlt(deepcopy(imu))
 
@@ -1466,17 +1469,21 @@ class LioEkfScans(client.ScanSource):
                     #     #     self._lio_ekf_gt._nav_curr.pose_mat())
                     #     self._lio_ekf.processPoseCorrectionAlt(
                     #         self._lio_ekf_gt._nav_curr.pose_mat())
+                    #     self._es_ekf.processPose(
+                    #         self._lio_ekf_gt._nav_curr.pose_mat())
 
                     # New College thing
-                    imu = next(imu_it)
-                    if imu.ts > pose_ts:
-                        print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
-                        print("pose_corr = \n", pose_corr)
-                        self._lio_ekf.processPoseCorrectionAlt(pose_corr)
-                        pose_idx += 1
-                        pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
-                        pose_ts = gts[pose_idx][0]
-                    self._lio_ekf.processImuAlt(deepcopy(imu))
+                    # imu = next(imu_it)
+                    # if imu.ts > pose_ts:
+                    #     print("MAKE CORRECTION FOR GT! pose_ts = ", pose_ts)
+                    #     print("pose_corr = \n", pose_corr)
+                    #     self._es_ekf.processPose(pose_corr)
+                    #     self._lio_ekf.processPoseCorrectionAlt(pose_corr)
+                    #     pose_idx += 1
+                    #     pose_corr = np.linalg.inv(gt_pose) @ gts[pose_idx][1]
+                    #     pose_ts = gts[pose_idx][0]
+                    # self._lio_ekf.processImuAlt(deepcopy(imu))
+                    # self._es_ekf.processImu(deepcopy(imu))
 
                     # print(f"GYR xyz[len: {imu_idx}]:\n")
                     # for i in range(len(self._lio_ekf._lg_gyr)):
@@ -1496,6 +1503,7 @@ class LioEkfScans(client.ScanSource):
 
         # print("NAV_CURR_GT = ", self._lio_ekf_gt._nav_curr)
         print("NAV_CURR = ", self._lio_ekf._nav_curr)
+        print("NAV_CURR (ESEKF) = ", self._es_ekf._nav_curr)
         # print("NAV_CURR CORR = ", self._lio_ekf_corr._nav_curr)
 
         print("imus stats: ")
@@ -1507,7 +1515,8 @@ class LioEkfScans(client.ScanSource):
 
         if self._plotting == "graphs":
             lio_ekf_graphs(self._lio_ekf)
-            # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
+            lio_ekf_graphs(self._es_ekf)
+            lio_ekf_error_graphs(self._lio_ekf, self._es_ekf)
             # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr, self._lio_ekf)
 
             # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)

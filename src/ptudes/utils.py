@@ -15,7 +15,18 @@ import ouster.sdk.pose_util as pu
 
 from scipy.spatial.transform import Rotation
 
-from ptudes.bag import OusterRawBagSource, IMUBagSource
+from ptudes.bag import OusterRawBagSource
+
+def vee(vec: np.ndarray) -> np.ndarray:
+    w = np.zeros((3, 3))
+    w[0, 1] = -vec[2]
+    w[0, 2] = vec[1]
+    w[1, 0] = vec[2]
+    w[1, 2] = -vec[0]
+    w[2, 0] = -vec[1]
+    w[2, 1] = vec[0]
+    return w
+
 
 def spin(pviz: PointViz,
          on_update: Callable[[PointViz, float], None],
