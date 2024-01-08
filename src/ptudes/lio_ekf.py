@@ -1381,17 +1381,17 @@ class LioEkfScans(client.ScanSource):
 
                 if batch(packet, ls_write):
                     # new scan finished
-                    if scan_idx >= self._start_scan:
-                        # self._lio_ekf.processLidarScan(ls_write)
-                        self._lio_ekf._kiss_icp.register_frame(ls_write)
-                        # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
-                        self._lio_ekf.processPoseCorrectionAlt(
-                            self._lio_ekf._kiss_icp.pose)
-                        self._es_ekf.processPose(
-                            self._lio_ekf._kiss_icp.pose)
-                        print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
+                    # if scan_idx >= self._start_scan:
+                    #     # self._lio_ekf.processLidarScan(ls_write)
+                    #     self._lio_ekf._kiss_icp.register_frame(ls_write)
+                    #     # print("BOOTING: .... kiss icp pose:\n", self._lio_ekf._kiss_icp.pose)
+                    #     self._lio_ekf.processPoseCorrectionAlt(
+                    #         self._lio_ekf._kiss_icp.pose)
+                    #     self._es_ekf.processPose(
+                    #         self._lio_ekf._kiss_icp.pose)
+                    #     print("NAV_CURR (Ls) = ", self._lio_ekf._nav_curr)
 
-                    yield ls_write
+                    # yield ls_write
 
                     if (self._end_scan is not None
                             and scan_idx >= self._end_scan):
@@ -1421,56 +1421,56 @@ class LioEkfScans(client.ScanSource):
 
                     # self._lio_ekf.processImu(imu)
 
-                    self._lio_ekf.processImuPacket(packet)
-                    self._es_ekf.processImu(IMU.from_packet(packet))
+                    # self._lio_ekf.processImuPacket(packet)
+                    # self._es_ekf.processImu(IMU.from_packet(packet))
 
 
                     # Sim IMU meas
-                    # dt = 0.01
-                    # if imu_idx % 10 == 0:
-                    #     acc = npr.normal(0.0, 1.5, 3)
-                    #     # acc[1] = 0
-                    #     # acc[2] = 0
-                    #     print("acc = ", acc)
-                    #     # print("g_fn = ", self._lio_ekf._g_fn)
-                    #     acc = acc + GRAV * np.array([0, 0, 1])
-                    #     gyr = npr.normal(0.0, 5.0, 3)
-                    #     # gyr = [0,0,0]
-                    #     # gyr[0] = 0
-                    #     # gyr[1] = 0
-                    #     # gyr[2] = 0
-                    #     # gyr = np.zeros(3)
-                    #     imu = IMU(acc, gyr, imu_idx * dt)
+                    dt = 0.01
+                    if imu_idx % 10 == 0:
+                        acc = npr.normal(0.0, 1.5, 3)
+                        # acc[1] = 0
+                        # acc[2] = 0
+                        print("acc = ", acc)
+                        # print("g_fn = ", self._lio_ekf._g_fn)
+                        acc = acc + GRAV * np.array([0, 0, 1])
+                        gyr = npr.normal(0.0, 5.0, 3)
+                        # gyr = [0,0,0]
+                        # gyr[0] = 0
+                        # gyr[1] = 0
+                        # gyr[2] = 0
+                        # gyr = np.zeros(3)
+                        imu = IMU(acc, gyr, imu_idx * dt)
 
-                    #     # add noise and biases
-                    #     acc_noise = npr.normal(0.0, 0.4, 3)
-                    #     # acc_noise = np.zeros(3)
-                    #     acc_bias = np.array([0.9, -0.2, -0.4])
-                    #     gyr_noise = npr.normal(0.0, 2.1, 3)
-                    #     # gyr_noise = np.zeros(3)
-                    #     gyr_bias = np.array([0.01, 0.03, -0.012])
-                    #     imu_noisy = IMU(acc + acc_noise + acc_bias,
-                    #                     gyr + gyr_noise + gyr_bias,
-                    #                     imu_idx * dt)
-                    #     print("IMU 0: ", imu)
-                    #     print("IMU 1: ", imu_noisy)
-                    # else:
-                    #     imu.ts = imu_idx * dt
-                    #     imu_noisy.ts = imu_idx * dt
-                    #     # input()
+                        # add noise and biases
+                        acc_noise = npr.normal(0.0, 0.4, 3)
+                        # acc_noise = np.zeros(3)
+                        acc_bias = np.array([0.9, -0.2, -0.4])
+                        gyr_noise = npr.normal(0.0, 2.1, 3)
+                        # gyr_noise = np.zeros(3)
+                        gyr_bias = np.array([0.01, 0.03, -0.012])
+                        imu_noisy = IMU(acc + acc_noise + acc_bias,
+                                        gyr + gyr_noise + gyr_bias,
+                                        imu_idx * dt)
+                        print("IMU 0: ", imu)
+                        print("IMU 1: ", imu_noisy)
+                    else:
+                        imu.ts = imu_idx * dt
+                        imu_noisy.ts = imu_idx * dt
+                        # input()
 
-                    # self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
-                    # self._es_ekf.processImu(deepcopy(imu_noisy))
-                    # # # # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
-                    # self._lio_ekf_gt.processImuAlt(deepcopy(imu))
+                    self._lio_ekf.processImuAlt(deepcopy(imu_noisy))
+                    self._es_ekf.processImu(deepcopy(imu_noisy))
+                    # # # self._lio_ekf_corr.processImuAlt(deepcopy(imu_noisy))
+                    self._lio_ekf_gt.processImuAlt(deepcopy(imu))
 
-                    # if (imu_idx + 1) % 10 == 0:
-                    #     # self._lio_ekf_corr.processPoseCorrectionAlt(
-                    #     #     self._lio_ekf_gt._nav_curr.pose_mat())
-                    #     self._lio_ekf.processPoseCorrectionAlt(
-                    #         self._lio_ekf_gt._nav_curr.pose_mat())
-                    #     self._es_ekf.processPose(
-                    #         self._lio_ekf_gt._nav_curr.pose_mat())
+                    if (imu_idx + 1) % 10 == 0:
+                        # self._lio_ekf_corr.processPoseCorrectionAlt(
+                        #     self._lio_ekf_gt._nav_curr.pose_mat())
+                        self._lio_ekf.processPoseCorrectionAlt(
+                            self._lio_ekf_gt._nav_curr.pose_mat())
+                        self._es_ekf.processPose(
+                            self._lio_ekf_gt._nav_curr.pose_mat())
 
                     # New College thing
                     # imu = next(imu_it)
@@ -1517,6 +1517,7 @@ class LioEkfScans(client.ScanSource):
             lio_ekf_graphs(self._lio_ekf)
             lio_ekf_graphs(self._es_ekf)
             lio_ekf_error_graphs(self._lio_ekf, self._es_ekf)
+            lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
             # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr, self._lio_ekf)
 
             # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
