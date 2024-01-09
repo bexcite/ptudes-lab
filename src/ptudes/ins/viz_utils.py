@@ -22,14 +22,14 @@ def lio_ekf_graphs(lio_ekf):
     # print(f"total_cnt = ", lio_ekf._imu_total_cnt)
 
     min_ts = lio_ekf._lg_t[0]
-    print(f"imu_ts: {min_ts}")
+    # print(f"imu_ts: {min_ts}")
     if lio_ekf._nav_scan_idxs:
         nav_idx = lio_ekf._nav_scan_idxs[0]
         # scan_ts = scan_begin_ts(lio_ekf._navs[nav_idx].scan)
         scan_ts = lio_ekf._navs_t[nav_idx]
-        print(f"scan_ts: {scan_ts}")
+        # print(f"scan_ts: {scan_ts}")
         min_ts = min(min_ts, scan_ts)
-    print(f"min_ts res: {min_ts}")
+    # print(f"min_ts res: {min_ts}")
 
     t = [t - min_ts for t in lio_ekf._lg_t]
     acc_x = [a[0] for a in lio_ekf._lg_acc]

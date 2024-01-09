@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -96,7 +96,6 @@ class NavState:
         s = (f"NavState{sb}:\n"
              f"  pos: {self.pos}\n"
              f"  vel: {self.vel}\n"
-             f"  att_v: {log_rot_mat(self.att_h)}\n"
              f"  att_v: {self.att_v}\n"
              f"  bg: {self.bias_gyr}\n"
              f"  ba: {self.bias_acc}\n"
@@ -124,10 +123,33 @@ def blk(m: np.ndarray,
     return m[row_id:row_id + nrows, col_id:col_id + ncols]
 
 
+def calc_ate(navs, gt_poses) -> Tuple[float, float]:
+    """Calculate Avg Traj Error (ATE)
+    
+    Args:
+      navs: list of NavStates from the filter
+      gt_poses: aligned poses
+
+    Return:
+      tuple with ATE_rotation (deg) and ATE_translation (m)
+    """ 
+    trans_d = []
+    rot_d = []
+    for nav, gt_pose in zip(navs, gt_poses):
+        p1 = nav.pose_mat()
+        trans_d.append(np.linalg.norm(gt_pose[:3, 3] - p1[:3, 3]))
+        rd = Rotation.from_matrix(
+            np.transpose(p1[:3, :3]) @ gt_pose[:3, :3]).as_rotvec()
+        rot_d.append(np.linalg.norm(rd))
+    ate_t = np.sum(np.square(trans_d)) / len(trans_d)
+    ate_r = np.sum(np.square(rot_d)) / len(rot_d)
+    ate_r = ate_r * 180 / np.pi
+
+    return ate_r, ate_t
+
+
 def ekf_traj_ate(ekf_gt, ekf):
     """Calculate ATE for trajectories in update knots."""
-
-    # assert len(ekf_gt._nav_scan_idxs) == len(ekf._nav_scan_idxs)
 
     # collect corresponding navs using update/scans knots
     t = []
@@ -148,22 +170,6 @@ def ekf_traj_ate(ekf_gt, ekf):
             nav_gt_t = next(t_gt_it)
         navs_gt.append(nav_gt)
 
-    # print(f"{len(t) = }")
-    # print(f"{len(navs) = }")
-    # print(f"{len(navs_gt) = }")
+    gt_poses = [nav.pose_mat() for nav in navs_gt]
 
-    trans_d = []
-    rot_d = []
-    for nav, nav_gt in zip(navs, navs_gt):
-        p1 = nav.pose_mat()
-        p2 = nav_gt.pose_mat()
-        trans_d.append(np.linalg.norm(p2[:3, 3] - p1[:3, 3]))
-        rd = Rotation.from_matrix(
-            np.transpose(p1[:3, :3]) @ p2[:3, :3]).as_rotvec()
-        rot_d.append(np.linalg.norm(rd))
-    ate_t = np.sum(np.square(trans_d)) / len(trans_d)
-    ate_r = np.sum(np.square(rot_d)) / len(rot_d)
-    ate_r = ate_r * 180 / np.pi
-
-
-    return ate_r, ate_t
+    return calc_ate(navs, gt_poses)
