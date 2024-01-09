@@ -11,7 +11,8 @@ from ptudes.lio_ekf import LioEkfScans
 
 import numpy as np
 import numpy.random as npr
-from ptudes.ins.data import IMU, GRAV, calc_ate, ekf_traj_ate
+from ptudes.ins.data import (IMU, GRAV, calc_ate, ekf_traj_ate,
+                             _collect_navs_from_gt)
 from ptudes.ins.es_ekf import ESEKF
 from ptudes.ins.viz_utils import lio_ekf_viz, lio_ekf_graphs, lio_ekf_error_graphs
 
@@ -145,9 +146,13 @@ def ptudes_ekf_sim(duration: float,
     print(f"ATE_rot:   {ate_rot:.04f} deg")
     print(f"ATE trans: {ate_trans:.04f} m")
 
+    # get associated nav states with gt states and time
+    gt_t, gt_navs, navs = _collect_navs_from_gt(ekf_gt, ekf)
+    gt_poses = [nav.pose_mat() for nav in gt_navs]
+
     if plot == "graphs":
-        lio_ekf_graphs(ekf)
-        lio_ekf_graphs(ekf_gt)
+        lio_ekf_graphs(ekf, gt=(gt_t, gt_poses))
+        # lio_ekf_graphs(ekf_gt, gt=(gt_t, gt_poses))
         lio_ekf_error_graphs(ekf_gt, ekf)
     elif plot == "point_viz":
         lio_ekf_viz(ekf)
@@ -155,7 +160,7 @@ def ptudes_ekf_sim(duration: float,
         return
     else:
         print(f"WARNING: plot param '{plot}' doesn't "
-                f"supported")
+              f"supported")
 
 
 @click.command(name="nc")
@@ -222,6 +227,7 @@ def ptudes_ekf_nc(file: str,
 
     ekf = ESEKF(init_grav=init_grav)
 
+    gt_t = []
     gt_poses = []
 
     initialized = False
@@ -249,6 +255,7 @@ def ptudes_ekf_nc(file: str,
             ekf.processPose(pose_corr)
 
             gt_poses.append(pose_corr)
+            gt_t.append(imu.ts)  # TODO: fix me on switch to continuous time!
             if pose_corr_idx + 1 < len(gts):
                 pose_corr_idx += 1
 
@@ -272,7 +279,7 @@ def ptudes_ekf_nc(file: str,
         return
 
     if plot == "graphs":
-        lio_ekf_graphs(ekf)
+        lio_ekf_graphs(ekf, gt=(gt_t, gt_poses))
         # lio_ekf_graphs(ekf_gt)
         # lio_ekf_error_graphs(ekf_gt, ekf)
     elif plot == "point_viz":

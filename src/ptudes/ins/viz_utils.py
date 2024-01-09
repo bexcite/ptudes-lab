@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from dataclasses import dataclass
 
 import numpy as np
@@ -12,7 +12,7 @@ from ptudes.ins.data import NavState, blk
 from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
                               GREY1_COLOR, WHITE_COLOR)
 
-def lio_ekf_graphs(lio_ekf):
+def lio_ekf_graphs(lio_ekf, gt: Optional[Tuple[List, List]] = None):
     """Plots of imus (mainly) logs"""
 
     # print("total_imu: accel = ",
@@ -81,8 +81,6 @@ def lio_ekf_graphs(lio_ekf):
     for a in ax[:-1]:
         plt.setp(a.get_xticklines(), visible=False)
         plt.setp(a.get_xticklabels(), visible=False)
-    for a in ax:
-        a.grid(True)
 
     # ax = plt.figure().add_subplot()  # projection='3d'
     # ax.plot(pos_x, pos_y)  # , pos_z
@@ -138,6 +136,16 @@ def lio_ekf_graphs(lio_ekf):
     axZ.plot(nav_t, dpos_z)
     axZ.grid(True)
     axZ.set_xlabel('t')
+
+    if gt is not None:
+        gt_t = np.array(gt[0]) - min_ts
+        gt_poses = np.array(gt[1])
+        axX.plot(gt_t, gt_poses[:, 0, 3])
+        axY.plot(gt_t, gt_poses[:, 1, 3])
+        axZ.plot(gt_t, gt_poses[:, 2, 3])
+
+    for a in ax + [axX, axY, axZ]:
+        a.grid(True)
 
     # for a in ax + [axX, axY, axZ]:
     #     a.plot(scan_t, np.zeros_like(scan_t), '8r')

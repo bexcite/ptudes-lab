@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -148,9 +148,7 @@ def calc_ate(navs, gt_poses) -> Tuple[float, float]:
     return ate_r, ate_t
 
 
-def ekf_traj_ate(ekf_gt, ekf):
-    """Calculate ATE for trajectories in update knots."""
-
+def _collect_navs_from_gt(ekf_gt, ekf) -> Tuple[List, List, List]:
     # collect corresponding navs using update/scans knots
     t = []
     navs = []
@@ -169,6 +167,14 @@ def ekf_traj_ate(ekf_gt, ekf):
             nav_gt = next(nav_gt_it)
             nav_gt_t = next(t_gt_it)
         navs_gt.append(nav_gt)
+
+    return (t, navs_gt, navs)
+
+
+def ekf_traj_ate(ekf_gt, ekf):
+    """Calculate ATE for trajectories in update knots."""
+
+    t, navs_gt, navs = _collect_navs_from_gt(ekf_gt, ekf)
 
     gt_poses = [nav.pose_mat() for nav in navs_gt]
 
