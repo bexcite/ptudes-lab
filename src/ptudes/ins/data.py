@@ -23,7 +23,7 @@ class IMU:
         imu = IMU()
         imu.ts = imu_packet.sys_ts / 10**9
         imu.lacc = GRAV * imu_packet.accel
-        imu.avel = imu_packet.angular_vel
+        imu.avel = np.pi * imu_packet.angular_vel / 180.0
         if _intr_rot is not None:
             imu.lacc = _intr_rot @ imu.lacc
             imu.avel = _intr_rot @ imu.avel

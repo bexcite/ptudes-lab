@@ -545,7 +545,7 @@ def lio_ekf_viz(lio_ekf):
             assert len(lio_ekf._navs) == len(lio_ekf._navs_pred)
             print(f"pred_nav[{target_idx}] = ", pred_nav)
             show_pos_att_uncertainty(pred_nav, pred_nav.cov)
-            print("nav_scan_idxs = ", lio_ekf._nav_scan_idxs)
+            # print("nav_scan_idxs = ", lio_ekf._nav_scan_idxs)
             print("target_idx = ", target_idx)
             point_viz.update()
             #

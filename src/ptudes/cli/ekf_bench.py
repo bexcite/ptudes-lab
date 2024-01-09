@@ -187,18 +187,30 @@ def ptudes_ekf_sim(duration: float,
               required=False,
               type=str,
               help="Plotting option [graphs, point_viz]")
+@click.option("-i",
+              "--imu-topic",
+              required=False,
+              default="/alphasense_driver_ros/imu",
+              type=str,
+              help="Imu topic name to use (msg/Imu or imu_packets)")
 def ptudes_ekf_nc(file: str,
                   meta: Optional[str] = None,
                   gt_file: Optional[str] = None,
                   duration: float = 2.0,
                   start_ts: float = 0.0,
-                  plot: Optional[str] = None) -> None:
+                  plot: Optional[str] = None,
+                  imu_topic: Optional[str] = None) -> None:
     """Newer College 2021 runs"""
 
     from ptudes.bag import IMUBagSource
     from ptudes.utils import read_newer_college_gt
 
-    imu_source = IMUBagSource(file, imu_topic="/alphasense_driver_ros/imu")
+    init_grav = GRAV * UP
+    # NOTE: IMUs have different nav frames (ouster vs alphasense) ...
+    if imu_topic in ["/os_cloud_node/imu", "/os_node/imu_packets"]:
+        init_grav = GRAV * DOWN
+
+    imu_source = IMUBagSource(file, imu_topic=imu_topic)
 
     if not gt_file:
         print("need gt now")
@@ -208,7 +220,7 @@ def ptudes_ekf_nc(file: str,
     gt_pose0 = gts[0][1]
     pose_corr_idx = 0
 
-    ekf = ESEKF(init_grav=GRAV * UP)
+    ekf = ESEKF(init_grav=init_grav)
 
     gt_poses = []
 
@@ -243,7 +255,8 @@ def ptudes_ekf_nc(file: str,
         if ts - first_ts - start_ts > dur_t:
             break
 
-    print("LAST GT POSE:\n", gt_poses[-1])
+    if gt_poses:
+        print("LAST GT POSE:\n", gt_poses[-1])
     print("NAV:\n", ekf._nav_curr)
 
     navs = [ekf._navs[i] for i in ekf._nav_scan_idxs]
