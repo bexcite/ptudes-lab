@@ -14,7 +14,10 @@ import numpy.random as npr
 from ptudes.ins.data import (IMU, GRAV, calc_ate, ekf_traj_ate,
                              _collect_navs_from_gt)
 from ptudes.ins.es_ekf import ESEKF
-from ptudes.ins.viz_utils import lio_ekf_viz, lio_ekf_graphs, lio_ekf_error_graphs
+from ptudes.ins.viz_utils import (lio_ekf_viz, lio_ekf_graphs,
+                                  lio_ekf_error_graphs)
+from ptudes.data import OusterLidarData
+from ptudes.kiss import KissICPWrapper
 
 DOWN = np.array([0, 0, -1])
 UP = np.array([0, 0, 1])
@@ -52,17 +55,9 @@ def sim_imu(acc_mean: np.ndarray = np.zeros(3),
     while True:
         if imu_idx % 10 == 0:
             acc = npr.normal(0.0, acc_std, 3)
-            # acc[1] = 0
-            # acc[2] = 0
             acc = acc_mean + acc - gravity
-
             gyr = npr.normal(0.0, gyr_std, 3)
             gyr = gyr + gyr_mean
-        # gyr = [0,0,0]
-        # gyr[0] = 0
-        # gyr[1] = 0
-        # gyr[2] = 0
-        # gyr = np.zeros(3)
         # add noise and biases
         acc_noise = npr.normal(0, acc_noise_std, 3)
         # acc_noise = np.zeros(3)
@@ -210,6 +205,7 @@ def ptudes_ekf_nc(file: str,
     from ptudes.bag import IMUBagSource
     from ptudes.utils import read_newer_college_gt
 
+    # TODO: handle properly known extrinsics calibration of NC datasets
     init_grav = GRAV * UP
     # NOTE: IMUs have different nav frames (ouster vs alphasense) ...
     if imu_topic in ["/os_cloud_node/imu", "/os_node/imu_packets"]:
@@ -291,5 +287,98 @@ def ptudes_ekf_nc(file: str,
               f"supported")
 
 
+@click.command(name="ouster")
+@click.argument('file', required=True, type=click.Path(exists=True))
+@click.option(
+    '-m',
+    '--meta',
+    required=False,
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+    help=
+    "Metadata for PCAP/BAG, required if automatic metadata resolution fails")
+@click.option("--start-scan", type=int, default=0, help="Start scan number")
+@click.option("--end-scan", type=int, help="End scan number, inclusive")
+@click.option("-p",
+              "--plot",
+              required=False,
+              type=str,
+              help="Plotting option [graphs, point_viz]")
+def ptudes_ekf_ouster(file: str,
+                      meta: Optional[str],
+                      start_scan: int,
+                      end_scan: Optional[int] = None,
+                      plot: Optional[str] = None) -> None:
+    """Ouster lidar PCAP/BAG lousely coupled ins odometry (with KissICP)
+
+    Essentially a smoothing action to the KissICP trajectory.
+    """
+
+    meta = resolve_metadata(file, meta)
+    if not meta:
+        raise click.ClickException(
+            "File not found, please specify a metadata file with `-m`")
+    click.echo(f"Reading metadata from: {meta}")
+    info = read_metadata_json(meta)
+
+    packet_source = read_packet_source(file, meta=info)
+
+    imu_to_sensor = packet_source.metadata.imu_to_sensor_transform.copy()
+    imu_to_sensor[:3, 3] /= 1000  # mm to m convertion
+    sensor_to_imu = np.linalg.inv(imu_to_sensor)
+
+    # exploiting extrinsics mechanics of Ouster SDK to
+    # make an XYZLut that transforms lidar points to the
+    # Nav (imu) frame
+    packet_source.metadata.extrinsic = sensor_to_imu
+
+    data_source = OusterLidarData(packet_source)
+
+    kiss_icp = KissICPWrapper(packet_source.metadata,
+                              _use_extrinsics=True,
+                              _min_range=2,
+                              _max_range=70)
+
+    ekf = ESEKF()
+
+    scan_idx = 0
+
+    gt_t = []
+    gt_poses = []
+
+    for d in data_source:
+        if isinstance(d, IMU):
+            if scan_idx >= start_scan:
+                ekf.processImu(d)
+        elif isinstance(d, client.LidarScan):
+            if scan_idx < start_scan:
+                scan_idx += 1
+                continue
+
+            ls = d
+            kiss_icp.register_frame(ls)
+            ekf.processPose(kiss_icp.pose)
+
+            gt_poses.append(kiss_icp.pose)
+            gt_t.append(ekf._navs_t[-1])
+
+            scan_idx += 1
+
+            if end_scan is not None and scan_idx > end_scan:
+                break
+
+    if not ekf._navs:
+        return
+
+    if plot == "graphs":
+        lio_ekf_graphs(ekf, gt=(gt_t, gt_poses))
+    elif plot == "point_viz":
+        lio_ekf_viz(ekf)
+    elif not plot:
+        return
+    else:
+        print(f"WARNING: plot param '{plot}' doesn't supported")
+
+
 ptudes_ekf_bench.add_command(ptudes_ekf_sim)
 ptudes_ekf_bench.add_command(ptudes_ekf_nc)
+ptudes_ekf_bench.add_command(ptudes_ekf_ouster)
