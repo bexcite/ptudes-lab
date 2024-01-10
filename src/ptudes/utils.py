@@ -179,6 +179,13 @@ def read_packet_source(
         return OusterRawBagSource(bags_paths, meta)
 
 
+# heavily inspired by KissICP method
+def save_poses_kitti_format(filename: str, poses: List[np.ndarray]):
+    kitti_format_poses = np.array(
+        [np.concatenate((pose[0], pose[1], pose[2])) for pose in poses])
+    np.savetxt(fname=filename, X=kitti_format_poses)
+
+
 def read_newer_college_gt(data_path: str) -> List[Tuple[float, np.ndarray]]:
     """Read ground truth poses for Newer College dataset"""
     gt_data = np.loadtxt(data_path, delimiter=",")

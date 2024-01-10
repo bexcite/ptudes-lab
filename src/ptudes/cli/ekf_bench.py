@@ -6,7 +6,8 @@ from typing import Optional
 import ouster.client as client
 from ouster.sdk.util import resolve_metadata
 
-from ptudes.utils import (read_metadata_json, read_packet_source)
+from ptudes.utils import (read_metadata_json, read_packet_source,
+                          read_newer_college_gt, save_poses_kitti_format)
 from ptudes.lio_ekf import LioEkfScans
 
 import numpy as np
@@ -200,10 +201,9 @@ def ptudes_ekf_nc(file: str,
                   start_ts: float = 0.0,
                   plot: Optional[str] = None,
                   imu_topic: Optional[str] = None) -> None:
-    """Newer College 2021 runs"""
+    """Newer College 2021 runs (imus to ekf + gt for pose correction)"""
 
     from ptudes.bag import IMUBagSource
-    from ptudes.utils import read_newer_college_gt
 
     # TODO: handle properly known extrinsics calibration of NC datasets
     init_grav = GRAV * UP
@@ -288,10 +288,10 @@ def ptudes_ekf_nc(file: str,
 
 
 @click.command(name="ouster")
-@click.argument('file', required=True, type=click.Path(exists=True))
+@click.argument("file", required=True, type=click.Path(exists=True))
 @click.option(
-    '-m',
-    '--meta',
+    "-m",
+    "--meta",
     required=False,
     type=click.Path(exists=True, dir_okay=False, readable=True),
     help=
@@ -303,11 +303,25 @@ def ptudes_ekf_nc(file: str,
               required=False,
               type=str,
               help="Plotting option [graphs, point_viz]")
+@click.option("-g",
+              "--gt-file",
+              required=False,
+              type=click.Path(exists=True, dir_okay=False, readable=True),
+              help="Ground truth file with poses to compare "
+              "(Newer College format)")
+@click.option(
+    "--save-kitti-poses",
+    required=False,
+    type=click.Path(exists=False, dir_okay=False, readable=True),
+    help=
+    "Save resulting poses to the file (in kitti format)")
 def ptudes_ekf_ouster(file: str,
                       meta: Optional[str],
                       start_scan: int,
                       end_scan: Optional[int] = None,
-                      plot: Optional[str] = None) -> None:
+                      plot: Optional[str] = None,
+                      gt_file: Optional[str] = None,
+                      save_kitti_poses: Optional[str] = None) -> None:
     """Ouster lidar PCAP/BAG lousely coupled ins odometry (with KissICP)
 
     Essentially a smoothing action to the KissICP trajectory.
@@ -335,8 +349,8 @@ def ptudes_ekf_ouster(file: str,
 
     kiss_icp = KissICPWrapper(packet_source.metadata,
                               _use_extrinsics=True,
-                              _min_range=2,
-                              _max_range=70)
+                              _min_range=0.5,
+                              _max_range=20)
 
     ekf = ESEKF()
 
@@ -344,6 +358,8 @@ def ptudes_ekf_ouster(file: str,
 
     gt_t = []
     gt_poses = []
+
+    res_poses = []
 
     for d in data_source:
         if isinstance(d, IMU):
@@ -358,6 +374,8 @@ def ptudes_ekf_ouster(file: str,
             kiss_icp.register_frame(ls)
             ekf.processPose(kiss_icp.pose)
 
+            res_poses.append(ekf._nav_curr.pose_mat())
+
             gt_poses.append(kiss_icp.pose)
             gt_t.append(ekf._navs_t[-1])
 
@@ -369,8 +387,18 @@ def ptudes_ekf_ouster(file: str,
     if not ekf._navs:
         return
 
+    if save_kitti_poses:
+        save_poses_kitti_format(save_kitti_poses, res_poses)
+        print(f"Kitti poses saved to: {save_kitti_poses}")
+
     if plot == "graphs":
-        lio_ekf_graphs(ekf, gt=(gt_t, gt_poses))
+        gt2 = None
+        if gt_file:
+            gts = read_newer_college_gt(gt_file)
+            gt2_t = [g[0] for g in gts]
+            gt2_poses = [g[1] for g in gts]
+            gt2 = (gt2_t, gt2_poses)
+        lio_ekf_graphs(ekf, gt=(gt_t, gt_poses), gt2=gt2)
     elif plot == "point_viz":
         lio_ekf_viz(ekf)
     elif not plot:
