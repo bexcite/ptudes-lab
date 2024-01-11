@@ -65,3 +65,10 @@ class OusterLidarData:
     def metadata(self) -> SensorInfo:
         """Return metadata from the underlying PacketSource."""
         return self._source.metadata
+
+
+def last_valid_packet_ts(scan: LidarScan) -> int:
+    """Return last valid packet timestamp of a LidarScan"""
+    columns_per_packet = scan.w // scan.packet_timestamp.shape[0]
+    return scan.packet_timestamp[client.last_valid_column(scan) //
+                                 columns_per_packet]

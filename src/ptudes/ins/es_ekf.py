@@ -96,11 +96,11 @@ class ESEKF:
         self._acc_vrw = 0.0043  # m/s^3 / sqrt(Hz)
         self._gyr_arw = 0.000266  #  rad/s^2 / sqrt(Hz)
 
-        print("ESEKF: Imu noise params:")
-        print(f"{self._acc_vrw = }")
-        print(f"{self._gyr_arw = }")
-        print(f"{self._acc_bias_std = }")
-        print(f"{self._gyr_bias_std = }")
+        # print("ESEKF: Imu noise params:")
+        # print(f"{self._acc_vrw = }")
+        # print(f"{self._gyr_arw = }")
+        # print(f"{self._acc_bias_std = }")
+        # print(f"{self._gyr_bias_std = }")
 
         self._imu_corr_time = 3600  # s
 
@@ -165,7 +165,7 @@ class ESEKF:
         self._imu_prev = self._imu_curr
 
         imu.dt = imu.ts - self._imu_prev.ts
-        print(f"ESEKF: IMU[{self._imu_idx}] = ", imu)
+        # print(f"ESEKF: IMU[{self._imu_idx}] = ", imu)
         self._imu_idx += 1
 
         self._imu_curr = imu
@@ -271,7 +271,7 @@ class ESEKF:
 
         # self._cov = np.copy(self._cov_init)
 
-        print("ESEKF: delta_x = \n", delta_x)
+        # print("ESEKF: delta_x = \n", delta_x)
 
         # apply correction error-state
         self._nav_err.dpos += delta_x[self.POS_ID:self.POS_ID + 3]
@@ -281,7 +281,7 @@ class ESEKF:
         self._nav_err.dbias_acc += delta_x[self.BA_ID:self.BA_ID + 3]
         self._nav_err.dgrav += delta_x[self.G_ID:self.G_ID + 3]
 
-        print(f"ESEKF: _nav_err FINAL [POSE CORR] = \n", self._nav_err)
+        # print(f"ESEKF: _nav_err FINAL [POSE CORR] = \n", self._nav_err)
 
         # inject error to the current state
         self._nav_curr.pos += self._nav_err.dpos
@@ -296,8 +296,8 @@ class ESEKF:
         phi_block = blk(self._cov, self.PHI_ID, self.PHI_ID, 3)
         set_blk(self._cov, self.PHI_ID, self.PHI_ID, G_theta @ phi_block @ G_theta.transpose())
 
-        print("\nESEKF_nav_prev (pre POSE CORR UPDATED) = \n", self._nav_prev)
-        print("ESEKF _nav_curr (POSE CORR UPDATED) = \n", self._nav_curr)
+        # print("\nESEKF_nav_prev (pre POSE CORR UPDATED) = \n", self._nav_prev)
+        # print("ESEKF _nav_curr (POSE CORR UPDATED) = \n", self._nav_curr)
         # print("UPDATED COV:::::::::::::::::::::\n", self._cov)
 
         self._reset_nav_err()
@@ -326,7 +326,7 @@ class ESEKF:
         self._nav_err.dbias_gyr = np.zeros(3)
         self._nav_err.dbias_acc = np.zeros(3)
         self._nav_err.dgrav = np.zeros(3)
-        print("ESEKF ------ RESET --- NAV -- ERR-----")
+        # print("ESEKF ------ RESET --- NAV -- ERR-----")
 
     def _log_on_imu_process(self):
         # logging IMU data for graphs

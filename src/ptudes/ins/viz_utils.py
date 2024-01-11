@@ -144,59 +144,14 @@ def lio_ekf_graphs(lio_ekf,
     def draw_gt(gtX):
         if gtX is not None and len(gtX[0]):
             gt_t = np.array(gtX[0]) - min_ts
-            # rot0 = gtX[1][0][:3, :3]
-            # pos0 = gtX[1][0][:3, 3]
-            pose0 = np.linalg.inv(gtX[1][0])
-            # TODO: vectorize me!
-            gt_poses = np.array([pose0 @ pose for pose in gtX[1]])
-            # gt_poses = gt_poses[:, :3, 3] @ rot0 - rot0 @ pos0
-            print("shape = ", gt_poses.shape)
+            gt_poses = np.array(gtX[1])
             axX.plot(gt_t, gt_poses[:, 0, 3])
             axY.plot(gt_t, gt_poses[:, 1, 3])
             axZ.plot(gt_t, gt_poses[:, 2, 3])
 
-    def filter_gt_by_ts(gtX, min_ts, max_ts):
-        if gtX is None:
-            return None
-        res_t = []
-        res_poses = []
-        idx = 0
-        gt_t = gtX[0]
-        gt_poses = gtX[1]
-        while idx < len(gt_t) and gt_t[idx] < min_ts:
-            idx += 1
-        while idx < len(gt_t) and gt_t[idx] <= max_ts:
-            res_t.append(gt_t[idx])
-            res_poses.append(gt_poses[idx])
-            idx += 1
-        return res_t, res_poses
-
-    # print("min_ts = ", lio_ekf._navs_t[0])
-    # print("max_ts = ", lio_ekf._navs_t[-1])
-
-    gt = filter_gt_by_ts(gt, lio_ekf._navs_t[0], lio_ekf._navs_t[-1])
-    gt2 = filter_gt_by_ts(gt2, lio_ekf._navs_t[0], lio_ekf._navs_t[-1])
-
-    # print("gt = ", gt)
-    # print("gt2 = ", gt2)
-
     draw_gt(gt)
     draw_gt(gt2)
     
-    # if gt is not None:
-        # gt_t = np.array(gt[0]) - min_ts
-        # gt_poses = np.array(gt[1])
-        # axX.plot(gt_t, gt_poses[:, 0, 3])
-        # axY.plot(gt_t, gt_poses[:, 1, 3])
-        # axZ.plot(gt_t, gt_poses[:, 2, 3])
-
-    # if gt is not None:
-    #     gt_t = np.array(gt[0]) - min_ts
-    #     gt_poses = np.array(gt[1])
-    #     axX.plot(gt_t, gt_poses[:, 0, 3])
-    #     axY.plot(gt_t, gt_poses[:, 1, 3])
-    #     axZ.plot(gt_t, gt_poses[:, 2, 3])
-
     for a in ax + [axX, axY, axZ]:
         a.grid(True)
 

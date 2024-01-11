@@ -1,5 +1,6 @@
 """Error-state Extended Kalman Filter experiments"""
 from typing import Iterator
+import time
 import click
 from typing import Optional
 
@@ -7,7 +8,8 @@ import ouster.client as client
 from ouster.sdk.util import resolve_metadata
 
 from ptudes.utils import (read_metadata_json, read_packet_source,
-                          read_newer_college_gt, save_poses_kitti_format)
+                          read_newer_college_gt, save_poses_kitti_format,
+                          filter_nc_gt_by_ts)
 from ptudes.lio_ekf import LioEkfScans
 
 import numpy as np
@@ -17,8 +19,9 @@ from ptudes.ins.data import (IMU, GRAV, calc_ate, ekf_traj_ate,
 from ptudes.ins.es_ekf import ESEKF
 from ptudes.ins.viz_utils import (lio_ekf_viz, lio_ekf_graphs,
                                   lio_ekf_error_graphs)
-from ptudes.data import OusterLidarData
+from ptudes.data import OusterLidarData, last_valid_packet_ts
 from ptudes.kiss import KissICPWrapper
+from tqdm import tqdm
 
 DOWN = np.array([0, 0, -1])
 UP = np.array([0, 0, 1])
@@ -37,26 +40,24 @@ def sim_imu(acc_mean: np.ndarray = np.zeros(3),
             acc_noise_std: float = 0.4,
             acc_bias: np.ndarray = np.array([0.9, -0.2, -0.4]),
             gyr_mean: np.ndarray = np.zeros(3),
-            gyr_std: float = 5.0,
-            gyr_noise_std: float = 2.5,
+            gyr_std: float = 1.0,
+            gyr_noise_std: float = 0.2,
             gyr_bias: np.ndarray = np.array([0.01, 0.03, -0.012]),
             gravity: np.ndarray = GRAV * DOWN,
             freq: float = 100) -> Iterator[IMU]:
     dt = 1 / freq
     imu_idx = 0
 
-    acc_bias = acc_bias
-    gyr_bias = gyr_bias
-
     acc = npr.normal(0.0, acc_std, 3)
-    acc = acc_mean + acc - gravity
+    acc = acc + acc_mean - gravity
+
     gyr = npr.normal(0.0, gyr_std, 3)
     gyr = gyr + gyr_mean
 
     while True:
         if imu_idx % 10 == 0:
             acc = npr.normal(0.0, acc_std, 3)
-            acc = acc_mean + acc - gravity
+            acc = acc + acc_mean - gravity
             gyr = npr.normal(0.0, gyr_std, 3)
             gyr = gyr + gyr_mean
         # add noise and biases
@@ -90,7 +91,7 @@ def sim_imu(acc_mean: np.ndarray = np.zeros(3),
               help="IMU accelerometer noise sigma")
 @click.option("--gyr-noise-std",
               type=float,
-              default=2.4,
+              default=0.4,
               help="IMU gyroscope noise sigma")
 @click.option("-p",
               "--plot",
@@ -103,7 +104,18 @@ def ptudes_ekf_sim(duration: float,
                    acc_noise_std: float,
                    gyr_noise_std: float,
                    plot: Optional[str] = None) -> None:
-    """Simulated IMU measurements"""
+    """EKF with simulated IMU measurements.
+
+    Ground truth pose is an integrated noise/bias free measurements.
+    """
+
+    print("Using sim IMUs with params:")
+    print(f"  freq: {freq} Hz")
+    print(f"  acc_noise_std: {acc_noise_std}")
+    print(f"  gyr_noise_std: {gyr_noise_std}")
+    print(f"  correction dt: {corr_t:.02} s")
+
+    print("Running EKF ... \n")
 
     ekf_gt = ESEKF()
     ekf = ESEKF()
@@ -113,6 +125,8 @@ def ptudes_ekf_sim(duration: float,
     ts = 0
     start_ts = 0
     last_corr_t = 0
+    # gt_t = []
+    # gt_poses = []
     for imu_ideal, imu_noisy in sim_imu(freq=freq,
                                         acc_noise_std=acc_noise_std,
                                         gyr_noise_std=gyr_noise_std):
@@ -128,9 +142,13 @@ def ptudes_ekf_sim(duration: float,
         if ts - last_corr_t > corr_t:
             ekf.processPose(ekf_gt._nav_curr.pose_mat())
             last_corr_t = ts
+            # gt_t.append(ts)
+            # gt_poses.append(ekf_gt._nav_curr.pose_mat())
 
         if ts - start_ts > dur_t:
             break
+
+    print("Results:")
 
     print(f"processed duration: {ts - start_ts:0.04} s")
     print(f"updates num: {len(ekf._nav_scan_idxs)}\n")
@@ -145,6 +163,7 @@ def ptudes_ekf_sim(duration: float,
     # get associated nav states with gt states and time
     gt_t, gt_navs, navs = _collect_navs_from_gt(ekf_gt, ekf)
     gt_poses = [nav.pose_mat() for nav in gt_navs]
+    print("gt_poses.shape = ", len(gt_poses))
 
     if plot == "graphs":
         lio_ekf_graphs(ekf, gt=(gt_t, gt_poses))
@@ -169,13 +188,13 @@ def ptudes_ekf_sim(duration: float,
     help="Metadata for BAG, required if automatic metadata resolution fails")
 @click.option("-g",
               "--gt-file",
-              required=False,
+              required=True,
               type=click.Path(exists=True, dir_okay=False, readable=True),
-              help="Ground truth file with poses to compare")
+              help="Ground truth file with poses to compare and correct poses")
 @click.option("-t",
               "--duration",
               type=float,
-              default=2.0,
+              default=0.0,
               help="Time duration of the data read/processed :"
               "(seconds, default 2.0)")
 @click.option("--start-ts",
@@ -201,7 +220,10 @@ def ptudes_ekf_nc(file: str,
                   start_ts: float = 0.0,
                   plot: Optional[str] = None,
                   imu_topic: Optional[str] = None) -> None:
-    """Newer College 2021 runs (imus to ekf + gt for pose correction)"""
+    """EKF with Newer College Dataset IMUs topics.
+
+    Ground truth (--gt-file) is used for pose correction.
+    """
 
     from ptudes.bag import IMUBagSource
 
@@ -211,6 +233,11 @@ def ptudes_ekf_nc(file: str,
     if imu_topic in ["/os_cloud_node/imu", "/os_node/imu_packets"]:
         init_grav = GRAV * DOWN
 
+    print("Reading NC dataset:")
+    print(f"  file: {file}")
+    print(f"  topic: {imu_topic}")
+    print(f"  gt file: {gt_file}")
+
     imu_source = IMUBagSource(file, imu_topic=imu_topic)
 
     if not gt_file:
@@ -218,8 +245,11 @@ def ptudes_ekf_nc(file: str,
         return
 
     gts = read_newer_college_gt(gt_file)
-    gt_pose0 = gts[0][1]
+
     pose_corr_idx = 0
+    gt_pose0 = np.linalg.inv(gts[pose_corr_idx][1])
+
+    print("Running EKF ... \n")
 
     ekf = ESEKF(init_grav=init_grav)
 
@@ -239,14 +269,14 @@ def ptudes_ekf_nc(file: str,
         # skipping till the beginning (--start-ts)
         if ts - first_ts < start_ts:
             while pose_corr_idx < len(gts) and ts >= gts[pose_corr_idx][0]:
-                print("next gt_ts = ", gts[pose_corr_idx][0])
                 pose_corr_idx += 1
+                gt_pose0 = np.linalg.inv(gts[pose_corr_idx][1])
             continue
 
         ekf.processImu(imu)
 
         if ts >= gts[pose_corr_idx][0]:
-            pose_corr = np.linalg.inv(gt_pose0) @ gts[pose_corr_idx][1]
+            pose_corr = gt_pose0 @ gts[pose_corr_idx][1]
 
             ekf.processPose(pose_corr)
 
@@ -255,19 +285,15 @@ def ptudes_ekf_nc(file: str,
             if pose_corr_idx + 1 < len(gts):
                 pose_corr_idx += 1
 
-        if ts - first_ts - start_ts > dur_t:
+        if dur_t > 0 and ts - first_ts - start_ts > dur_t:
             break
 
-    if gt_poses:
-        print("LAST GT POSE:\n", gt_poses[-1])
-    print("NAV:\n", ekf._nav_curr)
+    nav_poses = [ekf._navs[i].pose_mat() for i in ekf._nav_scan_idxs]
 
-    navs = [ekf._navs[i] for i in ekf._nav_scan_idxs]
-
-    print(f"scanned duration: {ts - first_ts:0.04} s")
-    print(f"updates num: {len(navs)}\n")
-    if navs:
-        ate_rot, ate_trans = calc_ate(navs, gt_poses)
+    print(f"scanned duration: {ts - first_ts - start_ts:0.04} s")
+    print(f"updates num: {len(nav_poses)}\n")
+    if nav_poses:
+        ate_rot, ate_trans = calc_ate(nav_poses, gt_poses)
         print(f"ATE_rot:   {ate_rot:.04f} deg")
         print(f"ATE trans: {ate_trans:.04f} m")
 
@@ -322,9 +348,18 @@ def ptudes_ekf_ouster(file: str,
                       plot: Optional[str] = None,
                       gt_file: Optional[str] = None,
                       save_kitti_poses: Optional[str] = None) -> None:
-    """Ouster lidar PCAP/BAG lousely coupled ins odometry (with KissICP)
+    """EKF with Ouster IMUs PCAP/BAG and scan KissICP poses updates.
 
-    Essentially a smoothing action to the KissICP trajectory.
+    Essentially a smoothing action to the KissICP trajectory output,
+    which is not even a lousely coupled IMU, because KissICP
+    state is not changed in any way (i.e. map, prediction model,
+    deskew, etc not affected)
+
+    Ground truth (--gt-file) in Newer College dataset is used only
+    for graphs (--plot graphs) to compare the resulting trajectory.
+
+    Use save trajectory in kitti format (--save-kitt-poses) to visualize
+    3d point clouds of the map using `ptudes flyby` or other tools.
     """
 
     meta = resolve_metadata(file, meta)
@@ -361,18 +396,40 @@ def ptudes_ekf_ouster(file: str,
 
     res_poses = []
 
-    for d in data_source:
+    t_imu = 0
+    t_imu_cnt = 0
+
+    t_corr = 0
+    t_corr_cnt = 0
+
+    t_kiss = 0
+
+    for d in tqdm(data_source):
         if isinstance(d, IMU):
             if scan_idx >= start_scan:
+                t1 = time.monotonic()
                 ekf.processImu(d)
+                t_imu += time.monotonic() - t1
+                t_imu_cnt += 1
         elif isinstance(d, client.LidarScan):
             if scan_idx < start_scan:
                 scan_idx += 1
                 continue
 
             ls = d
+            
+            t1 = time.monotonic()
             kiss_icp.register_frame(ls)
+            t_kiss += time.monotonic() - t1
+
+            t1 = time.monotonic()
             ekf.processPose(kiss_icp.pose)
+            t_corr += time.monotonic() - t1
+            t_corr_cnt += 1
+
+            # print(f"\n\nimu iter[{scan_idx}] = ", t_imu / t_imu_cnt)
+            # print(f"corr iter[{scan_idx}] = ", t_corr / t_corr_cnt)
+            # print(f"kiss iter[{scan_idx}] = ", t_kiss / t_corr_cnt)
 
             res_poses.append(ekf._nav_curr.pose_mat())
 
@@ -391,13 +448,38 @@ def ptudes_ekf_ouster(file: str,
         save_poses_kitti_format(save_kitti_poses, res_poses)
         print(f"Kitti poses saved to: {save_kitti_poses}")
 
+
+
     if plot == "graphs":
         gt2 = None
         if gt_file:
             gts = read_newer_college_gt(gt_file)
-            gt2_t = [g[0] for g in gts]
-            gt2_poses = [g[1] for g in gts]
-            gt2 = (gt2_t, gt2_poses)
+            gts = filter_nc_gt_by_ts(gts, gt_t[0], gt_t[-1])
+            if gts:
+                gts_pose0 = np.linalg.inv(gts[0][1])
+                gt2_t = [g[0] for g in gts]
+                gt2_poses = [gts_pose0 @ g[1] for g in gts]
+                gt2 = (gt2_t, gt2_poses)
+
+                nav_poses = [ekf._navs[i].pose_mat() for i in ekf._nav_scan_idxs]
+                ate_rot, ate_trans = calc_ate(nav_poses, gt2_poses)
+                print(f"ATE_rot:   {ate_rot:.04f} deg")
+                print(f"ATE trans: {ate_trans:.04f} m")
+
+                print("gt2_poses.len = ", len(gts))
+                print("scan_idx_len.len = ", len(ekf._nav_scan_idxs))
+
+                # ate_rot, ate_trans = calc_ate(nav_poses, gt_poses)
+                # print(f"ATE_rot:   {ate_rot:.04f} deg")
+                # print(f"ATE trans: {ate_trans:.04f} m")
+
+                # ate_rot, ate_trans = calc_ate(gt_poses, gt2_poses)
+                # print(f"ATE_rot:   {ate_rot:.04f} deg")
+                # print(f"ATE trans: {ate_trans:.04f} m")
+
+                
+                # dts = [t2-t1 for t1, t2 in zip(gt_t, gt2_t)]
+                # print("dts = ", dts)
         lio_ekf_graphs(ekf, gt=(gt_t, gt_poses), gt2=gt2)
     elif plot == "point_viz":
         lio_ekf_viz(ekf)

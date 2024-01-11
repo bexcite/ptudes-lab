@@ -123,29 +123,41 @@ def blk(m: np.ndarray,
     return m[row_id:row_id + nrows, col_id:col_id + ncols]
 
 
-def calc_ate(navs, gt_poses) -> Tuple[float, float]:
+def calc_ate(navs_poses, gt_poses) -> Tuple[float, float]:
     """Calculate Avg Traj Error (ATE)
     
     Args:
-      navs: list of NavStates from the filter
-      gt_poses: aligned poses
+      navs_poses: list of poses from the filter
+      gt_poses: aligned ground truth poses
 
     Return:
       tuple with ATE_rotation (deg) and ATE_translation (m)
-    """ 
+    """
     trans_d = []
     rot_d = []
-    for nav, gt_pose in zip(navs, gt_poses):
-        p1 = nav.pose_mat()
-        trans_d.append(np.linalg.norm(gt_pose[:3, 3] - p1[:3, 3]))
+    for nav_pose, gt_pose in zip(navs_poses, gt_poses):
+        trans_d.append(np.linalg.norm(gt_pose[:3, 3] - nav_pose[:3, 3]))
         rd = Rotation.from_matrix(
-            np.transpose(p1[:3, :3]) @ gt_pose[:3, :3]).as_rotvec()
+            np.transpose(nav_pose[:3, :3]) @ gt_pose[:3, :3]).as_rotvec()
         rot_d.append(np.linalg.norm(rd))
     ate_t = np.sum(np.square(trans_d)) / len(trans_d)
     ate_r = np.sum(np.square(rot_d)) / len(rot_d)
     ate_r = ate_r * 180 / np.pi
-
     return ate_r, ate_t
+
+
+def calc_ate_from_navs(navs, gt_poses) -> Tuple[float, float]:
+    """Calculate Avg Traj Error (ATE)
+    
+    Args:
+      navs: list of NavStates from the filter
+      gt_poses: aligned ground truth poses
+
+    Return:
+      tuple with ATE_rotation (deg) and ATE_translation (m)
+    """
+    nav_poses = [nav.pose_mat() for nav in navs]
+    return calc_ate(nav_poses, gt_poses)
 
 
 def _collect_navs_from_gt(ekf_gt, ekf) -> Tuple[List, List, List]:
@@ -168,6 +180,9 @@ def _collect_navs_from_gt(ekf_gt, ekf) -> Tuple[List, List, List]:
             nav_gt_t = next(t_gt_it)
         navs_gt.append(nav_gt)
 
+    t = t[::-1]
+    navs = navs[::-1]
+    navs_gt = navs_gt[::-1]
     return (t, navs_gt, navs)
 
 
@@ -176,6 +191,7 @@ def ekf_traj_ate(ekf_gt, ekf):
 
     t, navs_gt, navs = _collect_navs_from_gt(ekf_gt, ekf)
 
+    nav_poses = [nav.pose_mat() for nav in navs]
     gt_poses = [nav.pose_mat() for nav in navs_gt]
 
-    return calc_ate(navs, gt_poses)
+    return calc_ate(nav_poses, gt_poses)
