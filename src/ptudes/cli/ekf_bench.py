@@ -329,6 +329,10 @@ def ptudes_ekf_nc(file: str,
               required=False,
               type=str,
               help="Plotting option [graphs, point_viz]")
+@click.option('--use-imu-prediction',
+              is_flag=True,
+              help="Use EKF IMU pose prediction for KissICP register frame, "
+              "i.e. lously coupled Lidar Inertial Odometry")
 @click.option("-g",
               "--gt-file",
               required=False,
@@ -346,6 +350,7 @@ def ptudes_ekf_ouster(file: str,
                       start_scan: int,
                       end_scan: Optional[int] = None,
                       plot: Optional[str] = None,
+                      use_imu_prediction: bool = False,
                       gt_file: Optional[str] = None,
                       save_kitti_poses: Optional[str] = None) -> None:
     """EKF with Ouster IMUs PCAP/BAG and scan KissICP poses updates.
@@ -382,10 +387,11 @@ def ptudes_ekf_ouster(file: str,
 
     data_source = OusterLidarData(packet_source)
 
+    # TODO: expose --kiss-max-range N meters
     kiss_icp = KissICPWrapper(packet_source.metadata,
                               _use_extrinsics=True,
                               _min_range=0.5,
-                              _max_range=20)
+                              _max_range=70)
 
     ekf = ESEKF()
 
@@ -417,15 +423,31 @@ def ptudes_ekf_ouster(file: str,
                 continue
 
             ls = d
-            
+
             t1 = time.monotonic()
-            kiss_icp.register_frame(ls)
+
+            if use_imu_prediction:
+                # EKF IMU based prediction for KissICP
+                pose_guess = ekf._nav_curr.pose_mat()
+            else:
+                # Standard constant velocity/linear KissICP prediction
+                prediction = kiss_icp._kiss.get_prediction_model()
+                last_pose = (kiss_icp._kiss.poses[-1]
+                             if kiss_icp._kiss.poses else np.eye(4))
+                pose_guess = last_pose @ prediction
+            kiss_icp.register_frame(ls, initial_guess=pose_guess)
             t_kiss += time.monotonic() - t1
 
             t1 = time.monotonic()
             ekf.processPose(kiss_icp.pose)
+
+
+
             t_corr += time.monotonic() - t1
             t_corr_cnt += 1
+
+
+
 
             # print(f"\n\nimu iter[{scan_idx}] = ", t_imu / t_imu_cnt)
             # print(f"corr iter[{scan_idx}] = ", t_corr / t_corr_cnt)
@@ -477,7 +499,7 @@ def ptudes_ekf_ouster(file: str,
                 # print(f"ATE_rot:   {ate_rot:.04f} deg")
                 # print(f"ATE trans: {ate_trans:.04f} m")
 
-                
+
                 # dts = [t2-t1 for t1, t2 in zip(gt_t, gt2_t)]
                 # print("dts = ", dts)
         lio_ekf_graphs(ekf, gt=(gt_t, gt_poses), gt2=gt2)

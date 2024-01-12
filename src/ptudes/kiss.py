@@ -1,14 +1,15 @@
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import ouster.client as client
 from ouster.client import (SensorInfo, LidarScan, ChanField)
 
 from kiss_icp.config import load_config
+from kiss_icp.registration import register_frame as kregister_frame
 from kiss_icp.kiss_icp import KissICP
 from kiss_icp.config.parser import KISSConfig
 
-from ouster.sdk.pose_util import PoseH
+from ouster.sdk.pose_util import PoseH, log_pose
 
 Vec3 = np.ndarray
 
@@ -43,14 +44,16 @@ class KissICPWrapper:
         # using last valid column timestamp as a pose ts
         self._poses_ts = []
 
-    def register_frame(self, scan: LidarScan) -> PoseH:
+    def register_frame(self,
+                       scan: LidarScan,
+                       initial_guess: Optional[PoseH] = None) -> PoseH:
         """Register scan with kiss icp"""
 
         sel_flag = scan.field(ChanField.RANGE) != 0
         xyz = self._xyz_lut(scan)[sel_flag]
         timestamps = self._timestamps[sel_flag]
 
-        self._kiss.register_frame(xyz, timestamps)
+        self._kiss_register_frame(xyz, timestamps, initial_guess=initial_guess)
 
         # TODO[pb]: This could be done differently ...
         ts = client.last_valid_column_ts(scan) * 1e-09
@@ -61,6 +64,46 @@ class KissICPWrapper:
     def deskew(self, frame, timestamps) -> np.ndarray:
         return self._kiss.compensator.deskew_scan(frame, self._kiss.poses,
                                                   timestamps)
+
+    # Embed the KissICP original register_frame() in order to substitute the
+    # predictino model which is not exposed as an interface.
+    # Could be a subclassing, but seems this way is also fine .... idk ...
+    def _kiss_register_frame(self,
+                             frame,
+                             timestamps,
+                             initial_guess: Optional[PoseH] = None):
+        # Apply motion compensation
+        kself = self._kiss
+        frame = kself.compensator.deskew_scan(frame, self.poses, timestamps)
+
+        # Preprocess the input cloud
+        frame = kself.preprocess(frame)
+
+        # Voxelize
+        source, frame_downsample = kself.voxelize(frame)
+
+        # Get motion prediction and adaptive_threshold
+        sigma = kself.get_adaptive_threshold()
+
+        # Compute initial_guess for ICP
+        if initial_guess is None:
+            prediction = kself.get_prediction_model()
+            last_pose = kself.poses[-1] if kself.poses else np.eye(4)
+            initial_guess = last_pose @ prediction
+
+        # Run ICP
+        new_pose = kregister_frame(
+            points=source,
+            voxel_map=kself.local_map,
+            initial_guess=initial_guess,
+            max_correspondance_distance=3 * sigma,
+            kernel=sigma / 3,
+        )
+
+        kself.adaptive_threshold.update_model_deviation(np.linalg.inv(initial_guess) @ new_pose)
+        kself.local_map.update(frame_downsample, new_pose)
+        kself.poses.append(new_pose)
+        return frame, source
 
     @property
     def velocity(self) -> Vec3:
@@ -87,7 +130,7 @@ class KissICPWrapper:
     def poses_ts(self) -> List[float]:
         """Get all poses"""
         return self._poses_ts
-    
+
     @property
     def local_map_points(self) -> np.ndarray:
         return self._kiss.local_map.point_cloud()
