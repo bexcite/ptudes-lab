@@ -9,7 +9,8 @@ from ouster.sdk.util import resolve_metadata
 
 from ptudes.utils import (read_metadata_json, read_packet_source,
                           read_newer_college_gt, save_poses_kitti_format,
-                          filter_nc_gt_by_ts)
+                          filter_nc_gt_by_ts, filter_nc_gt_by_close_ts,
+                          reduce_active_beams)
 from ptudes.lio_ekf import LioEkfScans
 
 import numpy as np
@@ -343,6 +344,11 @@ def ptudes_ekf_nc(file: str,
               type=float,
               default=70,
               help="KissICP max range param in m (default 70)")
+@click.option("--beams",
+              type=int,
+              default=0,
+              help="Active beams number in a lidar scan (i.e. reduces "
+              "beams to the NUM)")
 @click.option(
     "--save-kitti-poses",
     required=False,
@@ -356,6 +362,7 @@ def ptudes_ekf_ouster(file: str,
                       plot: Optional[str] = None,
                       use_imu_prediction: bool = False,
                       gt_file: Optional[str] = None,
+                      beams: int = 0,
                       save_kitti_poses: Optional[str] = None,
                       kiss_max_range: float = 70.0) -> None:
     """EKF with Ouster IMUs PCAP/BAG and scan KissICP poses updates.
@@ -428,6 +435,9 @@ def ptudes_ekf_ouster(file: str,
 
             ls = d
 
+            if beams:
+                reduce_active_beams(ls, beams)
+
             t1 = time.monotonic()
 
             if use_imu_prediction:
@@ -471,36 +481,53 @@ def ptudes_ekf_ouster(file: str,
         print(f"Kitti poses saved to: {save_kitti_poses}")
 
 
-
     if plot == "graphs":
         gt2 = None
         if gt_file:
             gts = read_newer_college_gt(gt_file)
-            gts = filter_nc_gt_by_ts(gts, gt_t[0], gt_t[-1])
+
+            # aligning/filtering to have only close by ts gt and calc poses
+            gts, gt_t_matched = filter_nc_gt_by_close_ts(gts, gt_t)
+            gt_poses_matched = []
+            res_poses_matched = []
+            idx = 0
+            for t_m in gt_t_matched:
+                while gt_t[idx] != t_m:
+                    idx += 1
+                gt_poses_matched.append(gt_poses[idx])
+                res_poses_matched.append(res_poses[idx])
+                idx += 1
+
             if gts:
                 gts_pose0 = np.linalg.inv(gts[0][1])
                 gt2_t = [g[0] for g in gts]
                 gt2_poses = [gts_pose0 @ g[1] for g in gts]
                 gt2 = (gt2_t, gt2_poses)
 
-                nav_poses = [ekf._navs[i].pose_mat() for i in ekf._nav_scan_idxs]
-                ate_rot, ate_trans = calc_ate(nav_poses, gt2_poses)
+                num_poses = len(gt2_poses)
+
+                ate_rot, ate_trans = calc_ate(res_poses_matched, gt2_poses)
+                print(f"\nGround truth comparison (with smoothed EKF "
+                      f"{num_poses} poses):")
                 print(f"ATE_rot:   {ate_rot:.04f} deg")
                 print(f"ATE trans: {ate_trans:.04f} m")
 
-                print("gt2_poses.len = ", len(gts))
-                print("scan_idx_len.len = ", len(ekf._nav_scan_idxs))
+                ate_rot, ate_trans = calc_ate(gt_poses_matched, gt2_poses)
+                print("\nGround truth comparison (no-EKF, only KissICP "
+                      f"{num_poses} poses):")
+                print(f"ATE_rot:   {ate_rot:.04f} deg")
+                print(f"ATE trans: {ate_trans:.04f} m")
 
-                # ate_rot, ate_trans = calc_ate(nav_poses, gt_poses)
-                # print(f"ATE_rot:   {ate_rot:.04f} deg")
-                # print(f"ATE trans: {ate_trans:.04f} m")
+                # graph only matched gt poses of kiss icp too (if gt-file
+                # is present)
+                gt_t = gt_t_matched
+                gt_poses = gt_poses_matched
 
                 # ate_rot, ate_trans = calc_ate(gt_poses, gt2_poses)
                 # print(f"ATE_rot:   {ate_rot:.04f} deg")
                 # print(f"ATE trans: {ate_trans:.04f} m")
 
-
-                # dts = [t2-t1 for t1, t2 in zip(gt_t, gt2_t)]
+                # dts = [t2-t1 for t1, t2 in zip(gt_t_matched, gt2_t)]
                 # print("dts = ", dts)
         lio_ekf_graphs(ekf, gt=(gt_t, gt_poses), gt2=gt2)
     elif plot == "point_viz":

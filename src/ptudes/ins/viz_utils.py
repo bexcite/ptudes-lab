@@ -60,8 +60,6 @@ def lio_ekf_graphs(lio_ekf,
 
     # scan_t = [scan_end_ts(lio_ekf._navs[si].scan) - min_ts for si in lio_ekf._nav_scan_idxs]
 
-    scan_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_scan_idxs]
-
     # fig0, ax_main = plt.subplots(2, 1)
 
     # Create the plot
@@ -155,8 +153,15 @@ def lio_ekf_graphs(lio_ekf,
     for a in ax + [axX, axY, axZ]:
         a.grid(True)
 
+
+    # scan_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_scan_idxs]
     # for a in ax + [axX, axY, axZ]:
     #     a.plot(scan_t, np.zeros_like(scan_t), '8r')
+
+    # if gt2 is not None and len(gt2[0]):
+    #     gt2_t = np.array(gt2[0]) - min_ts
+    #     for a in ax + [axX, axY, axZ]:
+    #         a.plot(gt2_t, np.ones_like(gt2_t), '8b')
 
     plt.show()
 

@@ -235,3 +235,67 @@ def filter_nc_gt_by_ts(
         res.append(nc_gt[idx])
 
     return res
+
+
+def filter_nc_gt_by_close_ts(
+        nc_gt,
+        gt_t) -> Tuple[List[Tuple[float, np.ndarray]], List[float]]:
+    if not len(nc_gt):
+        return nc_gt
+    if not len(gt_t):
+        return []
+
+    # assuming non-decreasing timestamps
+    nc_t = [g[0] for g in nc_gt]
+    min_nc_t = np.min(np.array(nc_t[1:]) - np.array(nc_t[:-1]))
+    min_gt_t = np.min(np.array(gt_t[1:]) - np.array(gt_t[:-1]))
+    min_dt = min(min_nc_t, min_gt_t)
+
+    res_nc_gt = []
+    res_gt_t = []
+
+    nc_gt_it = iter(nc_gt)
+    gt_t_it = iter(gt_t)
+
+    n_t = next(nc_gt_it)
+    g_t = next(gt_t_it)
+
+    while True:
+        try:
+            while abs(n_t[0] - g_t) > min_dt:
+                while n_t[0] < g_t - min_dt:
+                    n_t = next(nc_gt_it)
+                while g_t < n_t[0] - min_dt:
+                    g_t = next(gt_t_it)
+            if n_t[0] < g_t:
+                n_t2 = next(nc_gt_it)
+                if abs(n_t[0] - g_t) < abs(n_t2[0] - g_t):
+                    res_nc_gt.append(n_t)
+                    res_gt_t.append(g_t)
+                    n_t = n_t2
+                    g_t = next(gt_t_it)
+            elif g_t <= n_t[0]:
+                g_t2 = next(gt_t_it)
+                if abs(n_t[0] - g_t) < abs(n_t[0] - g_t2):
+                    res_nc_gt.append(n_t)
+                    res_gt_t.append(g_t)
+                    n_t = next(nc_gt_it)
+                    g_t = g_t2
+        except StopIteration:
+            break
+
+    return res_nc_gt, res_gt_t
+
+
+def reduce_active_beams(ls: client.LidarScan, beams_num: int):
+    """Reduces the active beams of a lidar scan to beams_num.
+    
+    Achieved by setting RANGE field to 0 of 'inactive' beams. 
+    
+    Args:
+        beams_num: number of uniformaly distributed active beams
+    """
+    beam_idxs = np.linspace(0, ls.h, num=beams_num, endpoint=False, dtype=int)
+    clean_mask = np.ones(ls.h, dtype=bool)
+    clean_mask[beam_idxs] = 0
+    ls.field(client.ChanField.RANGE)[clean_mask, :] = 0
