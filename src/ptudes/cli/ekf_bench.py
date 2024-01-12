@@ -339,6 +339,10 @@ def ptudes_ekf_nc(file: str,
               type=click.Path(exists=True, dir_okay=False, readable=True),
               help="Ground truth file with poses to compare "
               "(Newer College format)")
+@click.option("--kiss-max-range",
+              type=float,
+              default=70,
+              help="KissICP max range param in m (default 70)")
 @click.option(
     "--save-kitti-poses",
     required=False,
@@ -352,7 +356,8 @@ def ptudes_ekf_ouster(file: str,
                       plot: Optional[str] = None,
                       use_imu_prediction: bool = False,
                       gt_file: Optional[str] = None,
-                      save_kitti_poses: Optional[str] = None) -> None:
+                      save_kitti_poses: Optional[str] = None,
+                      kiss_max_range: float = 70.0) -> None:
     """EKF with Ouster IMUs PCAP/BAG and scan KissICP poses updates.
 
     Essentially a smoothing action to the KissICP trajectory output,
@@ -387,11 +392,10 @@ def ptudes_ekf_ouster(file: str,
 
     data_source = OusterLidarData(packet_source)
 
-    # TODO: expose --kiss-max-range N meters
     kiss_icp = KissICPWrapper(packet_source.metadata,
                               _use_extrinsics=True,
                               _min_range=0.5,
-                              _max_range=70)
+                              _max_range=kiss_max_range)
 
     ekf = ESEKF()
 
@@ -442,12 +446,8 @@ def ptudes_ekf_ouster(file: str,
             ekf.processPose(kiss_icp.pose)
 
 
-
             t_corr += time.monotonic() - t1
             t_corr_cnt += 1
-
-
-
 
             # print(f"\n\nimu iter[{scan_idx}] = ", t_imu / t_imu_cnt)
             # print(f"corr iter[{scan_idx}] = ", t_corr / t_corr_cnt)
