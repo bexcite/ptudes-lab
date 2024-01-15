@@ -15,7 +15,8 @@ from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
 
 def lio_ekf_graphs(lio_ekf,
                    gt: Optional[Tuple[List, List]] = None,
-                   gt2: Optional[Tuple[List, List]] = None):
+                   gt2: Optional[Tuple[List, List]] = None,
+                   labels: List[str] = []):
     """Plots of imus (mainly) logs"""
 
     # print("total_imu: accel = ",
@@ -58,13 +59,8 @@ def lio_ekf_graphs(lio_ekf,
     dpos_y = [p[1] for p in dpos]
     dpos_z = [p[2] for p in dpos]
 
-    # scan_t = [scan_end_ts(lio_ekf._navs[si].scan) - min_ts for si in lio_ekf._nav_scan_idxs]
-
-    # fig0, ax_main = plt.subplots(2, 1)
-
     # Create the plot
     fig = plt.figure()
-    # fig, ax_all = plt.subplots(6, 2, sharex=True, sharey=True)
     ax = [
         plt.subplot(6, 2, 1),
         plt.subplot(6, 2, 3),
@@ -83,19 +79,10 @@ def lio_ekf_graphs(lio_ekf,
         plt.setp(a.get_xticklines(), visible=False)
         plt.setp(a.get_xticklabels(), visible=False)
 
-    # ax = plt.figure().add_subplot()  # projection='3d'
-    # ax.plot(pos_x, pos_y)  # , pos_z
-    # ax.set_xlabel('X')
-    # ax.set_ylabel('Y')
-
-    # ax.set_zlabel('Z')
-    # plt.gcf().canvas.mpl_connect(
-    #     'key_release_event',
-    #     lambda event: [exit(0) if event.key == 'escape' else None])
-
     i = 0
-    ax[i].plot(t, acc_x)
-    ax[i].plot(nav_t, ba_x)
+    ax[i].plot(t, acc_x, label="data (acc/gyr)")
+    ax[i].plot(nav_t, ba_x, label="bias (acc/gyr)")
+    ax[i].legend(frameon=False)
     ax[i].set_ylabel('acc_X')
     ax[i + 1].plot(t, acc_y)
     ax[i + 1].plot(nav_t, ba_y)
@@ -103,16 +90,6 @@ def lio_ekf_graphs(lio_ekf,
     ax[i + 2].plot(t, acc_z)
     ax[i + 2].plot(nav_t, ba_z)
     ax[i + 2].set_ylabel('acc_Z')
-    # ax[i + 2].set_xlabel('t')
-
-    # plt.plot(t, acc_x, "r", label="acc_x")
-    # plt.grid(True)
-    # plt.show()
-
-    # input()
-    # Create the plot
-    # for a in ax.flat:
-    #     a.cla()
 
     i = 3
     ax[i].plot(t, gyr_x)
@@ -126,9 +103,10 @@ def lio_ekf_graphs(lio_ekf,
     ax[i + 2].set_ylabel('gyr_Z')
     ax[i + 2].set_xlabel('t')
 
-    # i = 6
     axX = fig.add_subplot(6, 2, (2, 4))
-    axX.plot(nav_t, dpos_x)
+    main_label = "resulting pose" if not labels else labels[0]
+    axX.plot(nav_t, dpos_x, label=main_label)
+    axX.legend(frameon=False)
     axX.grid(True)
     axY = fig.add_subplot(6, 2, (6, 8))
     axY.plot(nav_t, dpos_y)
@@ -138,22 +116,23 @@ def lio_ekf_graphs(lio_ekf,
     axZ.grid(True)
     axZ.set_xlabel('t')
 
-
-    def draw_gt(gtX):
+    def draw_gt(gtX, line_label: str = ""):
         if gtX is not None and len(gtX[0]):
             gt_t = np.array(gtX[0]) - min_ts
             gt_poses = np.array(gtX[1])
-            axX.plot(gt_t, gt_poses[:, 0, 3])
+            axX.plot(gt_t, gt_poses[:, 0, 3], label=line_label)
+            if line_label:
+                axX.legend(frameon=False)
             axY.plot(gt_t, gt_poses[:, 1, 3])
             axZ.plot(gt_t, gt_poses[:, 2, 3])
 
-    draw_gt(gt)
-    draw_gt(gt2)
+    draw_gt(gt, line_label=labels[1] if len(labels) > 1 else "gt compare 1")
+    draw_gt(gt2, line_label=labels[2] if len(labels) > 2 else "gt compare 2")
     
     for a in ax + [axX, axY, axZ]:
         a.grid(True)
 
-
+    # Draw navs/gt poses knots on t axis
     # scan_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_scan_idxs]
     # for a in ax + [axX, axY, axZ]:
     #     a.plot(scan_t, np.zeros_like(scan_t), '8r')

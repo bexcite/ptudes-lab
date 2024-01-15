@@ -23,6 +23,7 @@ from ptudes.ins.viz_utils import (lio_ekf_viz, lio_ekf_graphs,
 from ptudes.data import OusterLidarData, last_valid_packet_ts
 from ptudes.kiss import KissICPWrapper
 from tqdm import tqdm
+from itertools import cycle
 
 DOWN = np.array([0, 0, -1])
 UP = np.array([0, 0, 1])
@@ -394,14 +395,14 @@ def ptudes_ekf_ouster(file: str,
 
     # exploiting extrinsics mechanics of Ouster SDK to
     # make an XYZLut that transforms lidar points to the
-    # Nav (imu) frame
+    # imu frame (nav frame in our case)
     packet_source.metadata.extrinsic = sensor_to_imu
 
     data_source = OusterLidarData(packet_source)
 
     kiss_icp = KissICPWrapper(packet_source.metadata,
                               _use_extrinsics=True,
-                              _min_range=0.5,
+                              _min_range=1.0,
                               _max_range=kiss_max_range)
 
     ekf = ESEKF()
@@ -421,17 +422,25 @@ def ptudes_ekf_ouster(file: str,
 
     t_kiss = 0
 
-    for d in tqdm(data_source):
+    scans_total = end_scan - start_scan if end_scan else None
+    scan_tqdm_it = iter(tqdm(cycle([0]), total=scans_total, unit=" scan"))
+
+    for d in data_source:
+
         if isinstance(d, IMU):
             if scan_idx >= start_scan:
                 t1 = time.monotonic()
                 ekf.processImu(d)
                 t_imu += time.monotonic() - t1
                 t_imu_cnt += 1
+
         elif isinstance(d, client.LidarScan):
             if scan_idx < start_scan:
                 scan_idx += 1
                 continue
+
+            # yep, just count and time the scan iteration
+            next(scan_tqdm_it)
 
             ls = d
 
@@ -529,7 +538,11 @@ def ptudes_ekf_ouster(file: str,
 
                 # dts = [t2-t1 for t1, t2 in zip(gt_t_matched, gt2_t)]
                 # print("dts = ", dts)
-        lio_ekf_graphs(ekf, gt=(gt_t, gt_poses), gt2=gt2)
+        lio_ekf_graphs(
+            ekf,
+            gt=(gt_t, gt_poses),
+            gt2=gt2,
+            labels=["ES EKF smoothed poses", "KissICP poses", "GT poses"])
     elif plot == "point_viz":
         lio_ekf_viz(ekf)
     elif not plot:
