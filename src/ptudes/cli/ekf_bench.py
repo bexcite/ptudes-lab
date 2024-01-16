@@ -349,7 +349,7 @@ def ptudes_ekf_nc(file: str,
               type=int,
               default=0,
               help="Active beams number in a lidar scan (i.e. reduces "
-              "beams to the NUM)")
+              "beams (i.e. active rows of a scan) to the NUM)")
 @click.option(
     "--save-kitti-poses",
     required=False,
@@ -486,7 +486,7 @@ def ptudes_ekf_ouster(file: str,
             # print(f"\n\nimu iter[{scan_idx}] = ", t_imu / t_imu_cnt)
             # print(f"corr iter[{scan_idx}] = ", t_corr / t_corr_cnt)
             # print(f"kiss iter[{scan_idx}] = ", t_kiss / t_corr_cnt)
-            print(f"track iter[{scan_idx}] = ", t_track / t_corr_cnt)
+            # print(f"track iter[{scan_idx}] = ", t_track / t_corr_cnt)
 
             res_poses.append(ekf._nav_curr.pose_mat())
 
