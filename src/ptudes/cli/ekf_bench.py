@@ -16,7 +16,7 @@ from ptudes.lio_ekf import LioEkfScans
 import numpy as np
 import numpy.random as npr
 from ptudes.ins.data import (IMU, GRAV, calc_ate, ekf_traj_ate,
-                             _collect_navs_from_gt)
+                             _collect_navs_from_gt, StreamStatsTracker)
 from ptudes.ins.es_ekf import ESEKF
 from ptudes.ins.viz_utils import (lio_ekf_viz, lio_ekf_graphs,
                                   lio_ekf_error_graphs)
@@ -405,6 +405,8 @@ def ptudes_ekf_ouster(file: str,
                               _min_range=1.0,
                               _max_range=kiss_max_range)
 
+    stats = StreamStatsTracker(use_beams_num=32, metadata=data_source.metadata)
+
     ekf = ESEKF()
 
     scan_idx = 0
@@ -425,10 +427,19 @@ def ptudes_ekf_ouster(file: str,
     scans_total = end_scan - start_scan if end_scan else None
     scan_tqdm_it = iter(tqdm(cycle([0]), total=scans_total, unit=" scan"))
 
+    t_track = 0
+
+    init_stats_ts = 3
+    init_stats_flag = False
+
     for d in data_source:
 
         if isinstance(d, IMU):
             if scan_idx >= start_scan:
+                t1 = time.monotonic()
+                stats.trackImu(d)
+                t_track += time.monotonic() - t1
+
                 t1 = time.monotonic()
                 ekf.processImu(d)
                 t_imu += time.monotonic() - t1
@@ -443,6 +454,10 @@ def ptudes_ekf_ouster(file: str,
             next(scan_tqdm_it)
 
             ls = d
+
+            t1 = time.monotonic()
+            stats.trackScan(ls)
+            t_track += time.monotonic() - t1
 
             if beams:
                 reduce_active_beams(ls, beams)
@@ -471,6 +486,7 @@ def ptudes_ekf_ouster(file: str,
             # print(f"\n\nimu iter[{scan_idx}] = ", t_imu / t_imu_cnt)
             # print(f"corr iter[{scan_idx}] = ", t_corr / t_corr_cnt)
             # print(f"kiss iter[{scan_idx}] = ", t_kiss / t_corr_cnt)
+            print(f"track iter[{scan_idx}] = ", t_track / t_corr_cnt)
 
             res_poses.append(ekf._nav_curr.pose_mat())
 
@@ -481,6 +497,12 @@ def ptudes_ekf_ouster(file: str,
 
             if end_scan is not None and scan_idx > end_scan:
                 break
+
+        if not init_stats_flag and stats.dt > init_stats_ts:
+            print(stats)
+            grav_est = stats.acc_mean / np.linalg.norm(stats.acc_mean)
+            print("Grav vector est: ", grav_est)
+            init_stats_flag = True
 
     if not ekf._navs:
         return

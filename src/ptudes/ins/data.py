@@ -195,3 +195,168 @@ def ekf_traj_ate(ekf_gt, ekf):
     gt_poses = [nav.pose_mat() for nav in navs_gt]
 
     return calc_ate(nav_poses, gt_poses)
+
+
+class StreamStatsTracker:
+    """Tracks the mean/std stats for scans range"""
+
+    def __init__(self,
+                 use_beams_num: Optional[int] = None,
+                 metadata: Optional[client.SensorInfo] = None):
+        # Ouster metadata
+        self._metadata = metadata
+        self._mean = 0
+        self._scans_num = 0
+        self._points_num = 0
+        self._sigma_sq = 0
+        self._use_beams_num = use_beams_num
+        self._beams_sel = None
+
+        self._mean_acc = np.zeros(3)
+        self._mean_gyr = np.zeros(3)
+
+        # sigma^2 * n - accumulator
+        self._sigman_acc = np.zeros(3)
+        self._sigman_gyr = np.zeros(3)
+        self._imu_num = 0
+
+        self._max_ts = 0
+        self._min_ts = 0
+
+        self._min_range = 0
+        self._max_range = 0
+
+        self._all = np.array([])
+
+    def __range_to_m(self, range: np.ndarray) -> np.ndarray:
+        """Convert Ouster range data to meters
+
+        NOTE: better to use Ouster XYZLut, but it's slower if we
+        don't care about the all points in 3D
+        """
+        range_to_m_coefs = 0.001
+        if self._metadata:
+            if (self._metadata.format.udp_profile_lidar ==
+                    client.UDPProfileLidar.PROFILE_LIDAR_RNG15_RFL8_NIR8):
+                range_to_m_coefs = 8 * range_to_m_coefs
+        return range * range_to_m_coefs
+
+    def _track_min_max_ts(self, ts: float):
+        if not self._imu_num and not self._scans_num:
+            self._min_ts = ts
+            self._max_ts = ts
+        else:
+            self._min_ts = min(self._min_ts, ts)
+            self._max_ts = max(self._max_ts, ts)
+
+    def _track_min_max_range(self, range: np.ndarray):
+        if not self._points_num:
+            self._min_range = np.min(range)
+            self._max_range = np.max(range)
+        else:
+            self._min_range = min(self._min_range, np.min(range))
+            self._max_range = max(self._max_range, np.max(range))
+
+    def trackImu(self, imu: IMU):
+        """Update IMU mean/sigma"""
+        mean_acc_prev = self._mean_acc.copy()
+        mean_gyr_prev = self._mean_gyr.copy()
+
+        self._mean_acc += (imu.lacc - self._mean_acc) / (self._imu_num + 1)
+        self._sigman_acc += (imu.lacc - mean_acc_prev) * (imu.lacc -
+                                                          self._mean_acc)
+
+        self._mean_gyr += (imu.avel - self._mean_gyr) / (self._imu_num + 1)
+        self._sigman_gyr += (imu.avel - mean_gyr_prev) * (imu.avel -
+                                                          self._mean_gyr)
+
+        self._track_min_max_ts(imu.ts)
+
+        self._imu_num += 1
+
+    def trackScan(self, ls: client.LidarScan) -> Tuple[float, float]:
+        """Update scan stats for range mean/sigma"""
+        if self._use_beams_num:
+            if self._beams_sel is None:
+                self._beams_sel = np.linspace(0,
+                                              ls.h,
+                                              num=self._use_beams_num,
+                                              endpoint=False,
+                                              dtype=int)
+            range = ls.field(client.ChanField.RANGE)[self._beams_sel, :]
+        else:
+            range = ls.field(client.ChanField.RANGE)
+
+        range = range[range > 0]
+
+        # range to meters
+        range = self.__range_to_m(range)
+
+        self._track_min_max_range(range)
+
+        m = np.mean(range)
+        n = range.size
+        v = np.var(range)
+
+        # some reference: https://math.stackexchange.com/questions/2971315/how-do-i-combine-standard-deviations-of-two-groups
+        s1 = 0 if not self._points_num else (self._points_num - 1) * self._sigma_sq
+        corr = self._points_num * n * np.square((self._mean - m)) / (
+            (self._points_num + n) * ((self._points_num + n - 1)))
+        self._sigma_sq = (s1 + n * v) / (self._points_num + n - 1) + corr
+
+        self._mean = (self._mean * self._points_num + m * n) / (self._points_num + n)
+
+        # NOTE: tracking here the sensor timestamp and not the
+        #       udp/host timestamp, can be parameterised later
+        #       when needed
+        self._track_min_max_ts(client.last_valid_column_ts(ls) * 1e-9)
+
+        self._scans_num += 1
+        self._points_num += n
+
+    @property
+    def range_mean(self) -> float:
+        return self._mean
+
+    @property
+    def range_std(self) -> float:
+        return np.sqrt(self._sigma_sq)
+
+    @property
+    def acc_mean(self) -> np.ndarray:
+        return self._mean_acc
+
+    @property
+    def acc_std(self) -> np.ndarray:
+        return np.sqrt(self._sigman_acc / self._imu_num)
+
+    @property
+    def gyr_mean(self) -> np.ndarray:
+        return self._mean_gyr
+
+    @property
+    def gyr_std(self) -> np.ndarray:
+        return np.sqrt(self._sigman_gyr / self._imu_num)
+
+    @property
+    def dt(self) -> float:
+        return self._max_ts - self._min_ts
+
+    def _formatted_str(self) -> str:
+        s3_min_range = max(self._min_range,
+                           self.range_mean - 3 * self.range_std)
+        s3_max_range = min(self._max_range,
+                           self.range_mean + 3 * self.range_std)
+        s = (
+            f"StreamStatsTracker[dt: {self.dt:.04f} s, imus: {self._imu_num}, scans: {self._scans_num}]:\n"
+            f"  range_mean: {self.range_mean:.03f} m,\n"
+            f"  range_std: {self.range_std:.03f} m (s3 span: [{s3_min_range:.03f} - {s3_max_range:.03f} m])\n"
+            f"  range min max: {self._min_range:.03f} - {self._max_range:.03f} m\n"
+            f"  acc_mean: {self.acc_mean} m/s^2\n"
+            f"  acc_std: {self.acc_std}\n"
+            f"  gyr_mean: {self.gyr_mean} rad/s\n"
+            f"  gyr_std: {self.gyr_std}")
+        return s
+
+    def __repr__(self):
+        return self._formatted_str()

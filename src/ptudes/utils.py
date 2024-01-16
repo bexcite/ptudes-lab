@@ -298,4 +298,7 @@ def reduce_active_beams(ls: client.LidarScan, beams_num: int):
     beam_idxs = np.linspace(0, ls.h, num=beams_num, endpoint=False, dtype=int)
     clean_mask = np.ones(ls.h, dtype=bool)
     clean_mask[beam_idxs] = 0
+    # clearing only range, because for all downstream processing tasks
+    # it's usually enough to not look at any other pixels
     ls.field(client.ChanField.RANGE)[clean_mask, :] = 0
+
