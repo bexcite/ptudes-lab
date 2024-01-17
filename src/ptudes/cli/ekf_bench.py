@@ -9,7 +9,7 @@ from ouster.sdk.util import resolve_metadata
 
 from ptudes.utils import (read_metadata_json, read_packet_source,
                           read_newer_college_gt, save_poses_kitti_format,
-                          filter_nc_gt_by_ts, filter_nc_gt_by_close_ts,
+                          save_poses_nc_gt_format, filter_nc_gt_by_close_ts,
                           reduce_active_beams)
 from ptudes.lio_ekf import LioEkfScans
 
@@ -356,6 +356,12 @@ def ptudes_ekf_nc(file: str,
     type=click.Path(exists=False, dir_okay=False, readable=True),
     help=
     "Save resulting poses to the file (in kitti format)")
+@click.option(
+    "--save-nc-gt-poses",
+    required=False,
+    type=click.Path(exists=False, dir_okay=False, readable=True),
+    help=
+    "Save resulting poses to the file (in NC ground truth format)")
 def ptudes_ekf_ouster(file: str,
                       meta: Optional[str],
                       start_scan: int,
@@ -365,6 +371,7 @@ def ptudes_ekf_ouster(file: str,
                       gt_file: Optional[str] = None,
                       beams: int = 0,
                       save_kitti_poses: Optional[str] = None,
+                      save_nc_gt_poses: Optional[str] = None,
                       kiss_max_range: float = 70.0) -> None:
     """EKF with Ouster IMUs PCAP/BAG and scan KissICP poses updates.
 
@@ -510,6 +517,10 @@ def ptudes_ekf_ouster(file: str,
     if save_kitti_poses:
         save_poses_kitti_format(save_kitti_poses, res_poses)
         print(f"Kitti poses saved to: {save_kitti_poses}")
+
+    if save_nc_gt_poses:
+        save_poses_nc_gt_format(save_nc_gt_poses, t=gt_t, poses=res_poses)
+        print(f"NC GT poses saved to: {save_nc_gt_poses}")
 
 
     if plot == "graphs":

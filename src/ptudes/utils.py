@@ -186,6 +186,25 @@ def save_poses_kitti_format(filename: str, poses: List[np.ndarray]):
     np.savetxt(fname=filename, X=kitti_format_poses)
 
 
+def save_poses_nc_gt_format(filename: str, t: List[float],
+                            poses: List[np.ndarray]):
+    """Save odom result in the Newer College GT format for comparison."""
+    t_arr = np.array(t)
+    poses_arr = np.array(poses)
+
+    res = np.zeros((len(t), 9))
+    # secs
+    res[:, 0] = np.floor(t_arr)
+    # nsecs
+    res[:, 1] = np.floor((t_arr - res[:, 0]) * 1e+9)
+    # x,y,z
+    res[:, 2:5] = poses_arr[:, :3, 3]
+    # qx,qy,qz,qw
+    res[:, 5:10] = Rotation.from_matrix(poses_arr[:, :3, :3]).as_quat()
+
+    np.savetxt(fname=filename, X=res, delimiter=", ")
+
+
 def read_newer_college_gt(data_path: str) -> List[Tuple[float, np.ndarray]]:
     """Read ground truth poses for Newer College dataset"""
     gt_data = np.loadtxt(data_path, delimiter=",")
@@ -301,4 +320,3 @@ def reduce_active_beams(ls: client.LidarScan, beams_num: int):
     # clearing only range, because for all downstream processing tasks
     # it's usually enough to not look at any other pixels
     ls.field(client.ChanField.RANGE)[clean_mask, :] = 0
-
