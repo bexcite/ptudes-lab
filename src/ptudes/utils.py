@@ -206,7 +206,7 @@ def save_poses_nc_gt_format(filename: str, t: List[float],
 
 
 def read_newer_college_gt(data_path: str) -> List[Tuple[float, np.ndarray]]:
-    """Read ground truth poses for Newer College dataset"""
+    """Read ground truth poses for Newer College 2021 dataset"""
     gt_data = np.loadtxt(data_path, delimiter=",")
     ts = gt_data[:, 0] + gt_data[:, 1] * 1e-9
 
@@ -215,7 +215,15 @@ def read_newer_college_gt(data_path: str) -> List[Tuple[float, np.ndarray]]:
 
     rots = Rotation.from_quat(gt_data[:, 5:9]).as_matrix()
     pos[:, :3, :3] = rots
-    return [(t, p) for t, p in zip(ts[:], pos[:])]
+
+    # NC 2021 apply transform to move GT from base to Ouster IMU Nav frame
+    os_imu_to_os_sensor = np.eye(4)
+    os_imu_to_os_sensor[:3, 3] = [-0.014, 0.012, 0.015]
+    os_sensor_to_base = np.eye(4)
+    os_sensor_to_base[:3, 3] = [0.001, 0.000, 0.091]
+    os_imu_to_base = os_sensor_to_base @ os_imu_to_os_sensor
+
+    return [(t, p @ os_imu_to_base) for t, p in zip(ts[:], pos[:])]
 
 
 def filter_nc_gt_by_ts(

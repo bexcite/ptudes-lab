@@ -91,10 +91,10 @@ class ESEKF:
         # self._gyr_arw = 0.000266  #  rad/s^2 / sqrt(Hz)
 
         # TODO: select for Ouster IMU better ....
-        self._acc_bias_std = 0.029  # m/s^2 / sqrt(Hz)
+        self._acc_bias_std = 0.049  # m/s^2 / sqrt(Hz)
         self._gyr_bias_std = 0.38  # rad/s / sqrt(Hz)
         self._acc_vrw = 0.0043  # m/s^3 / sqrt(Hz)
-        self._gyr_arw = 0.000266  #  rad/s^2 / sqrt(Hz)
+        self._gyr_arw = 0.000466  #  rad/s^2 / sqrt(Hz)
 
         # print("ESEKF: Imu noise params:")
         # print(f"{self._acc_vrw = }")

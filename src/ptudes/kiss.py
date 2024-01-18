@@ -39,6 +39,8 @@ class KissICPWrapper:
         self._kiss_config = load_config(None,
                                         deskew=True,
                                         max_range=self._max_range)
+        self._kiss_config.data.min_range = self._min_range
+        
         self._kiss = KissICP(config=self._kiss_config)
 
         # using last valid column timestamp as a pose ts
@@ -66,7 +68,7 @@ class KissICPWrapper:
                                                   timestamps)
 
     # Embed the KissICP original register_frame() in order to substitute the
-    # predictino model which is not exposed as an interface.
+    # prediction model/initial guess which is not exposed as an interface.
     # Could be a subclassing, but seems this way is also fine .... idk ...
     def _kiss_register_frame(self,
                              frame,

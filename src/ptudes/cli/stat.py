@@ -4,12 +4,15 @@ import click
 from typing import Optional
 
 import numpy as np
+from itertools import cycle
+from tqdm import tqdm
 import ouster.client as client
 from ouster.sdk.util import resolve_metadata
 
 from ptudes.utils import (read_metadata_json, read_packet_source)
 
 from ptudes.ins.data import StreamStatsTracker, IMU
+from ptudes.kiss import KissICPWrapper
 from ptudes.data import OusterLidarData
 
 @click.command(name="stat")
@@ -36,11 +39,25 @@ from ptudes.data import OusterLidarData
               default=3.0,
               help="Time period of the data (imu/scan) to read in seconds. "
               "(default: 3.0, use 0 to read and stats all data source)")
+@click.option('--kiss-run',
+              is_flag=True,
+              help="KissICP vanilla wrapper run (for time profiling)")
+@click.option("--kiss-min-range",
+              type=float,
+              default=1,
+              help="KissICP min range param in m (default 1)")
+@click.option("--kiss-max-range",
+              type=float,
+              default=70,
+              help="KissICP max range param in m (default 70)")
 def ptudes_stat(file: str, meta: Optional[str],
                 start_scan: int = 0,
                 end_scan: Optional[int] = None,
                 beams: int = 0,
-                duration: float = 3) -> None:
+                duration: float = 3,
+                kiss_run: bool = False,
+                kiss_min_range: float = 1.0,
+                kiss_max_range: float = 70) -> None:
     """Ouster BAGS/PCAP data source stats
 
     Calculates scans range and imu acc/gyr statistics for --duration seconds.
@@ -67,28 +84,27 @@ def ptudes_stat(file: str, meta: Optional[str],
 
     stats = StreamStatsTracker(use_beams_num=beams,
                                metadata=data_source.metadata)
+    
+    kiss_icp = KissICPWrapper(data_source.metadata,
+                              _min_range=kiss_min_range,
+                              _max_range=kiss_max_range)
+    
+    scans_total = end_scan - start_scan if end_scan else None
+    scan_tqdm_it = iter(tqdm(cycle([0]), total=scans_total, unit=" scan"))
 
-    scan_idx = 0
-
-    for d in data_source:
+    for _, d in data_source.withScanIdx(start_scan=start_scan,
+                                        end_scan=end_scan):
 
         if isinstance(d, IMU):
-            imu = d
-            if scan_idx >= start_scan:
-                stats.trackImu(d)
-
+            stats.trackImu(d)
 
         elif isinstance(d, client.LidarScan):
-            if scan_idx < start_scan:
-                scan_idx += 1
-                continue
-
+            next(scan_tqdm_it)
             ls = d
             stats.trackScan(ls)
-            scan_idx += 1
 
-            if end_scan is not None and scan_idx > end_scan:
-                break
+            if kiss_run:
+                kiss_icp.register_frame(ls)
 
         if duration and stats.dt > duration:
             break
@@ -96,4 +112,3 @@ def ptudes_stat(file: str, meta: Optional[str],
     print(stats)
     grav_est = stats.acc_mean / np.linalg.norm(stats.acc_mean)
     print("Gravity vector estimation: ", grav_est)
-

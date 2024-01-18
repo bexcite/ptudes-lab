@@ -5,6 +5,7 @@ import click
 from typing import Optional
 
 import ouster.client as client
+from ouster.client import ChanField
 from ouster.sdk.util import resolve_metadata
 
 from ptudes.utils import (read_metadata_json, read_packet_source,
@@ -335,12 +336,19 @@ def ptudes_ekf_nc(file: str,
               is_flag=True,
               help="Use EKF IMU pose prediction for KissICP register frame, "
               "i.e. lously coupled Lidar Inertial Odometry")
+@click.option('--ekf-pose-to-map',
+              is_flag=True,
+              help="Use EKF pose for KissICP local map update")
 @click.option("-g",
               "--gt-file",
               required=False,
               type=click.Path(exists=True, dir_okay=False, readable=True),
               help="Ground truth file with poses to compare "
               "(Newer College format)")
+@click.option("--kiss-min-range",
+              type=float,
+              default=1,
+              help="KissICP min range param in m (default 1)")
 @click.option("--kiss-max-range",
               type=float,
               default=70,
@@ -368,10 +376,12 @@ def ptudes_ekf_ouster(file: str,
                       end_scan: Optional[int] = None,
                       plot: Optional[str] = None,
                       use_imu_prediction: bool = False,
+                      ekf_pose_to_map: bool = False,
                       gt_file: Optional[str] = None,
                       beams: int = 0,
                       save_kitti_poses: Optional[str] = None,
                       save_nc_gt_poses: Optional[str] = None,
+                      kiss_min_range: float = 1.0,
                       kiss_max_range: float = 70.0) -> None:
     """EKF with Ouster IMUs PCAP/BAG and scan KissICP poses updates.
 
@@ -409,14 +419,12 @@ def ptudes_ekf_ouster(file: str,
 
     kiss_icp = KissICPWrapper(packet_source.metadata,
                               _use_extrinsics=True,
-                              _min_range=1.0,
+                              _min_range=kiss_min_range,
                               _max_range=kiss_max_range)
 
     stats = StreamStatsTracker(use_beams_num=32, metadata=data_source.metadata)
 
     ekf = ESEKF()
-
-    scan_idx = 0
 
     gt_t = []
     gt_poses = []
@@ -437,26 +445,22 @@ def ptudes_ekf_ouster(file: str,
     t_track = 0
 
     init_stats_ts = 3
-    init_stats_flag = False
+    init_stats_flag = True
 
-    for d in data_source:
+    for scan_idx, d in data_source.withScanIdx(start_scan=start_scan,
+                                               end_scan=end_scan):
 
         if isinstance(d, IMU):
-            if scan_idx >= start_scan:
-                t1 = time.monotonic()
-                stats.trackImu(d)
-                t_track += time.monotonic() - t1
+            t1 = time.monotonic()
+            stats.trackImu(d)
+            t_track += time.monotonic() - t1
 
-                t1 = time.monotonic()
-                ekf.processImu(d)
-                t_imu += time.monotonic() - t1
-                t_imu_cnt += 1
+            t1 = time.monotonic()
+            ekf.processImu(d)
+            t_imu += time.monotonic() - t1
+            t_imu_cnt += 1
 
         elif isinstance(d, client.LidarScan):
-            if scan_idx < start_scan:
-                scan_idx += 1
-                continue
-
             # yep, just count and time the scan iteration
             next(scan_tqdm_it)
 
@@ -480,13 +484,86 @@ def ptudes_ekf_ouster(file: str,
                 last_pose = (kiss_icp._kiss.poses[-1]
                              if kiss_icp._kiss.poses else np.eye(4))
                 pose_guess = last_pose @ prediction
-            kiss_icp.register_frame(ls, initial_guess=pose_guess)
+
+            # # 2.0 kiss_icp.register_frame()
+            # sel_flag = ls.field(ChanField.RANGE) != 0
+            # xyz = kiss_icp._xyz_lut(ls)[sel_flag]
+            # frame = xyz
+            # timestamps = kiss_icp._timestamps[sel_flag]
+
+            t1 = time.monotonic()
+
+            if not ekf_pose_to_map:
+
+                # Option1: No EKF result integration to map
+                kiss_icp.register_frame(ls, initial_guess=pose_guess)
+                ekf.processPose(kiss_icp.pose)
+                gt_poses.append(kiss_icp.pose)
+
+            else:
+                # Option2: Integrate EKF result to the kiss local map
+
+                # 2.0 kiss_icp.register_frame()
+                sel_flag = ls.field(ChanField.RANGE) != 0
+                xyz = kiss_icp._xyz_lut(ls)[sel_flag]
+                frame = xyz
+                timestamps = kiss_icp._timestamps[sel_flag]
+
+                # Apply motion compensation
+
+                # ## 2.1 kiss_icp._kiss_register_frame()
+                initial_guess = pose_guess
+                kself = kiss_icp._kiss
+                frame = kself.compensator.deskew_scan(frame, kiss_icp.poses, timestamps)
+
+                # Preprocess the input cloud (not used here)
+                frame = kself.preprocess(frame)
+
+                # Voxelize
+                source, frame_downsample = kself.voxelize(frame)
+
+                # Get motion prediction and adaptive_threshold
+                sigma = kself.get_adaptive_threshold()
+
+                # Compute initial_guess for ICP
+                if initial_guess is None:
+                    prediction = kself.get_prediction_model()
+                    last_pose = kself.poses[-1] if kself.poses else np.eye(4)
+                    initial_guess = last_pose @ prediction
+
+                # Run ICP
+                from kiss_icp.registration import register_frame as kregister_frame
+                kiss_icp_pose = kregister_frame(
+                    points=source,
+                    voxel_map=kself.local_map,
+                    initial_guess=initial_guess,
+                    max_correspondance_distance=3 * sigma,
+                    kernel=sigma / 3,
+                )
+
+                ## 2.2 EKF Update
+                ekf.processPose(kiss_icp_pose)
+
+                ekf_pose = ekf._nav_curr.pose_mat()
+
+                kself.adaptive_threshold.update_model_deviation(
+                    np.linalg.inv(initial_guess) @ ekf_pose)
+                kself.local_map.update(frame_downsample, ekf_pose)
+                kself.poses.append(ekf_pose)
+
+                ts = client.last_valid_column_ts(ls) * 1e-09
+                kiss_icp._poses_ts.append(ts)
+
+                gt_poses.append(kiss_icp_pose)
+            ############################
+
+            ekf._navs[-1].kiss_map = kiss_icp.local_map_points
+            # ekf._navs[-1].xyz = xyz
+
             t_kiss += time.monotonic() - t1
 
             t1 = time.monotonic()
-            ekf.processPose(kiss_icp.pose)
-
-
+            # ekf.processPose(kiss_icp.pose)
             t_corr += time.monotonic() - t1
             t_corr_cnt += 1
 
@@ -497,13 +574,8 @@ def ptudes_ekf_ouster(file: str,
 
             res_poses.append(ekf._nav_curr.pose_mat())
 
-            gt_poses.append(kiss_icp.pose)
+            # gt_poses.append(kiss_icp.pose)
             gt_t.append(ekf._navs_t[-1])
-
-            scan_idx += 1
-
-            if end_scan is not None and scan_idx > end_scan:
-                break
 
         if not init_stats_flag and stats.dt > init_stats_ts:
             print(stats)

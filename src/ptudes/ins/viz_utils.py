@@ -128,7 +128,7 @@ def lio_ekf_graphs(lio_ekf,
 
     draw_gt(gt, line_label=labels[1] if len(labels) > 1 else "gt compare 1")
     draw_gt(gt2, line_label=labels[2] if len(labels) > 2 else "gt compare 2")
-    
+
     for a in ax + [axX, axY, axZ]:
         a.grid(True)
 
@@ -276,15 +276,15 @@ def lio_ekf_viz(lio_ekf):
     point_viz = make_point_viz(f"Traj: poses = {len(lio_ekf._navs)}",
                                show_origin=True)
 
-    def next_scan_based_nav(navs: List[NavState], start_idx: int = 0) -> int:
-        ln = len(navs)
-        start_idx = (start_idx + ln) % ln
-        curr_idx = start_idx
-        while navs[curr_idx].scan is None:
-            curr_idx = (curr_idx + 1) % ln
-            if curr_idx == start_idx:
-                break
-        return curr_idx
+    # def next_scan_based_nav(navs: List[NavState], start_idx: int = 0) -> int:
+    #     ln = len(navs)
+    #     start_idx = (start_idx + ln) % ln
+    #     curr_idx = start_idx
+    #     while navs[curr_idx].scan is None:
+    #         curr_idx = (curr_idx + 1) % ln
+    #         if curr_idx == start_idx:
+    #             break
+    #     return curr_idx
 
     @dataclass
     class CloudsStruct:
@@ -361,31 +361,44 @@ def lio_ekf_viz(lio_ekf):
     def set_cloud_from_idx(idx: int):
         nonlocal clouds
         nav = lio_ekf._navs[idx]
-        if nav.scan is None:
-            return
+        # if nav.scan is None:
+        #     return
         if idx not in clouds:
             clouds[idx] = CloudsStruct(point_viz)
-            clouds[idx].xyz.pose = nav.pose_mat()
-            clouds[idx].xyz.points = nav.xyz
-            clouds[idx].frame.pose = nav.pose_mat()
-            clouds[idx].frame.points = nav.frame
-            clouds[idx].frame_ds.pose = nav.pose_mat()
-            clouds[idx].frame_ds.points = nav.frame_ds
-            clouds[idx].src_source.pose = nav.pose_mat()
-            clouds[idx].src_source.points = nav.src_source
-            clouds[idx].src_source_hl.pose = nav.pose_mat()
-            clouds[idx].src_source_hl.points = nav.src_source_hl
-            clouds[idx].src.points = nav.src
-            clouds[idx].src_hl.points = nav.src_hl
-            clouds[idx].tgt.points = nav.tgt
-            clouds[idx].tgt_hl.points = nav.tgt_hl
-            clouds[idx].local_map.points = nav.local_map
-            clouds[idx].kiss_map.points = nav.kiss_map
+            if nav.xyz is not None:
+                clouds[idx].xyz.pose = nav.pose_mat()
+                clouds[idx].xyz.points = nav.xyz
+            if nav.frame is not None:
+                clouds[idx].frame.pose = nav.pose_mat()
+                clouds[idx].frame.points = nav.frame
+            if nav.frame_ds is not None:
+                clouds[idx].frame_ds.pose = nav.pose_mat()
+                clouds[idx].frame_ds.points = nav.frame_ds
+            if nav.src_source is not None:
+                clouds[idx].src_source.pose = nav.pose_mat()
+                clouds[idx].src_source.points = nav.src_source
+            if nav.src_source_hl is not None:
+                clouds[idx].src_source_hl.pose = nav.pose_mat()
+                clouds[idx].src_source_hl.points = nav.src_source_hl
+            if nav.src is not None:
+                clouds[idx].src.points = nav.src
+            if nav.src_hl is not None:
+                clouds[idx].src_hl.points = nav.src_hl
+            if nav.tgt is not None:
+                clouds[idx].tgt.points = nav.tgt
+            if nav.tgt_hl is not None:
+                clouds[idx].tgt_hl.points = nav.tgt_hl
+            if nav.local_map is not None:
+                clouds[idx].local_map.points = nav.local_map
+            if nav.kiss_map is not None:
+                clouds[idx].kiss_map.points = nav.kiss_map
             clouds[idx].disable()
+
         clouds[idx].kiss_map.enable()
 
     def toggle_cloud_from_idx(idx: int, atr: Optional[str] = None):
         nonlocal clouds
+        print("toggle_idx = ", idx)
         if idx not in clouds:
             return
         if atr is None or not hasattr(clouds[idx], atr):
@@ -482,7 +495,13 @@ def lio_ekf_viz(lio_ekf):
         if key == 32:
             if target_idx in clouds:
                 clouds[target_idx].disable()
-            target_id = (target_id + 1) % len(lio_ekf._nav_scan_idxs)
+
+            scans_num = len(lio_ekf._nav_scan_idxs)
+            if mods == 0:
+                target_id = (target_id + 1) % scans_num
+            elif mods == 1:
+                target_id = (target_id + scans_num - 1) % scans_num
+
             target_idx = lio_ekf._nav_scan_idxs[target_id]
 
             target_nav = lio_ekf._navs[target_idx]
@@ -519,9 +538,11 @@ def lio_ekf_viz(lio_ekf):
             toggle_cloud_from_idx(target_idx, "frame_ds")
             point_viz.update()
         elif key == ord('M'):
+            print("MMMMM")
             if mods == 0:
                 toggle_cloud_from_idx(target_idx, "local_map")
             elif mods == 2:
+                print("MMMMM, kiss")
                 toggle_cloud_from_idx(target_idx, "kiss_map")
             point_viz.update()
         elif key == ord('P'):

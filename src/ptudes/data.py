@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict, Iterator
+from typing import Optional, Union, Dict, Iterator, Tuple
 
 import ouster.client as client
 import ouster.client._client as _client
@@ -10,7 +10,7 @@ from ptudes.ins.data import IMU
 
 
 class OusterLidarData:
-    """Interface of PacketSource to LidarScan + IMU iterator"""
+    """Lidar data source: LidarScan + IMUs iterator with scan index"""
 
     def __init__(self,
                  source: PacketSource,
@@ -26,8 +26,15 @@ class OusterLidarData:
             fields if fields is not None else
             self._source.metadata.format.udp_profile_lidar)
 
-    def __iter__(self) -> Iterator[Union[LidarScan, IMU]]:
-        """Make an iterator."""
+        self._scan_idx = 0
+
+    def withScanIdx(
+        self,
+        *,
+        start_scan: int = 0,
+        end_scan: Optional[int] = None
+    ) -> Iterator[Tuple[int, Union[LidarScan, IMU]]]:
+        """Make an iterator with (scanIdx, scan/imu)"""
 
         w = self._source.metadata.format.columns_per_frame
         h = self._source.metadata.format.pixels_per_column
@@ -37,13 +44,16 @@ class OusterLidarData:
         pf = _client.PacketFormat.from_info(self._source.metadata)
         batch = _client.ScanBatcher(w, pf)
 
+        scan_idx = 0
+
         it = iter(self._source)
         while True:
             try:
                 packet = next(it)
             except StopIteration:
                 if ls_write is not None:
-                    yield ls_write
+                    yield scan_idx, ls_write
+                    scan_idx += 1
                 return
 
             if isinstance(packet, LidarPacket):
@@ -51,11 +61,25 @@ class OusterLidarData:
                                                  columns_per_packet)
                 if batch(packet, ls_write):
                     # Finished frame
-                    yield ls_write
+                    # TODO: Scan batching op can be skipped when looking
+                    # up for the start_scan (it will increase search speed)
+                    if scan_idx >= start_scan:
+                        yield scan_idx, ls_write
+                    scan_idx += 1
+
+                    if end_scan is not None and scan_idx > end_scan:
+                        break
+
                     ls_write = None
 
             elif isinstance(packet, ImuPacket):
-                yield IMU.from_packet(packet)
+                if scan_idx >= start_scan:
+                    yield scan_idx, IMU.from_packet(packet)
+
+    def __iter__(self) -> Iterator[Tuple[int, Union[LidarScan, IMU]]]:
+        """Make an iterator just data"""
+        for scan_idx, d in self.withScanIdx():
+            yield scan_idx, d
 
     def close(self) -> None:
         """Close the underlying PacketSource."""
