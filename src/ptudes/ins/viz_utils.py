@@ -14,16 +14,11 @@ from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
 
 
 def lio_ekf_graphs(lio_ekf,
+                   xy_plot: bool = True,
                    gt: Optional[Tuple[List, List]] = None,
                    gt2: Optional[Tuple[List, List]] = None,
                    labels: List[str] = []):
     """Plots of imus (mainly) logs"""
-
-    # print("total_imu: accel = ",
-    #       lio_ekf._imu_total.lacc / lio_ekf._imu_total_cnt + lio_ekf._g_fn)
-    # print("total_imu: avel  = ",
-    #       lio_ekf._imu_total.avel / lio_ekf._imu_total_cnt)
-    # print(f"total_cnt = ", lio_ekf._imu_total_cnt)
 
     min_ts = lio_ekf._lg_t[0]
     # print(f"imu_ts: {min_ts}")
@@ -54,20 +49,19 @@ def lio_ekf_graphs(lio_ekf,
 
     nav_t = [nav_t - min_ts for nav_t in lio_ekf._navs_t]
 
-    dpos = [nav.pos for nav in lio_ekf._navs]
-    dpos_x = [p[0] for p in dpos]
-    dpos_y = [p[1] for p in dpos]
-    dpos_z = [p[2] for p in dpos]
+    pos = [nav.pos for nav in lio_ekf._navs]
+    pos_x = [p[0] for p in pos]
+    pos_y = [p[1] for p in pos]
+    pos_z = [p[2] for p in pos]
 
-    # Create the plot
     fig = plt.figure()
     ax = [
-        plt.subplot(6, 2, 1),
-        plt.subplot(6, 2, 3),
-        plt.subplot(6, 2, 5),
-        plt.subplot(6, 2, 7),
-        plt.subplot(6, 2, 9),
-        plt.subplot(6, 2, 11)
+        plt.subplot(6, 3, 1),
+        plt.subplot(6, 3, 4),
+        plt.subplot(6, 3, 7),
+        plt.subplot(6, 3, 10),
+        plt.subplot(6, 3, 13),
+        plt.subplot(6, 3, 16)
     ]
     for a in ax[1:]:
         a.sharex(ax[0])
@@ -82,7 +76,7 @@ def lio_ekf_graphs(lio_ekf,
     i = 0
     ax[i].plot(t, acc_x, label="data (acc/gyr)")
     ax[i].plot(nav_t, ba_x, label="bias (acc/gyr)")
-    ax[i].legend(frameon=False)
+    ax[i].legend(loc="upper right", frameon=False)
     ax[i].set_ylabel('acc_X')
     ax[i + 1].plot(t, acc_y)
     ax[i + 1].plot(nav_t, ba_y)
@@ -103,43 +97,63 @@ def lio_ekf_graphs(lio_ekf,
     ax[i + 2].set_ylabel('gyr_Z')
     ax[i + 2].set_xlabel('t')
 
-    axX = fig.add_subplot(6, 2, (2, 4))
     main_label = "resulting pose" if not labels else labels[0]
-    axX.plot(nav_t, dpos_x, label=main_label)
-    axX.legend(frameon=False)
-    axX.grid(True)
-    axY = fig.add_subplot(6, 2, (6, 8))
-    axY.plot(nav_t, dpos_y)
-    axY.grid(True)
-    axZ = fig.add_subplot(6, 2, (10, 12))
-    axZ.plot(nav_t, dpos_z)
-    axZ.grid(True)
-    axZ.set_xlabel('t')
+
+    axXY = []
+    if xy_plot:
+        aXY = fig.add_subplot(6, 3, (2, 12))
+        aXY.plot(pos_x, pos_y, label=main_label)
+        aXY.set_xlabel("X (m)")
+        aXY.set_ylabel("Y (m)")
+        axXY.append(aXY)
+    else:
+        axX = fig.add_subplot(6, 3, (2, 6))
+        axX.plot(nav_t, pos_x, label=main_label)
+        axX.legend(frameon=False)
+        axX.grid(True)
+        axY = fig.add_subplot(6, 3, (8, 12))
+        axY.plot(nav_t, pos_y)
+        axXY.extend([axX, axY])
+
+    axZ = fig.add_subplot(6, 3, (14, 18))
+    axZ.plot(nav_t, pos_z)
+    axZ.set_ylabel("Z (m)")
+    axZ.set_xlabel('t (s)')
 
     def draw_gt(gtX, line_label: str = ""):
         if gtX is not None and len(gtX[0]):
             gt_t = np.array(gtX[0]) - min_ts
             gt_poses = np.array(gtX[1])
-            axX.plot(gt_t, gt_poses[:, 0, 3], label=line_label)
-            if line_label:
-                axX.legend(frameon=False)
-            axY.plot(gt_t, gt_poses[:, 1, 3])
+            if xy_plot:
+                axXY[0].plot(gt_poses[:, 0, 3],
+                             gt_poses[:, 1, 3],
+                             label=line_label)
+            else:
+                axXY[0].plot(gt_t, gt_poses[:, 0, 3], label=line_label)
+                axXY[1].plot(gt_t, gt_poses[:, 1, 3])
             axZ.plot(gt_t, gt_poses[:, 2, 3])
 
     draw_gt(gt, line_label=labels[1] if len(labels) > 1 else "gt compare 1")
     draw_gt(gt2, line_label=labels[2] if len(labels) > 2 else "gt compare 2")
 
-    for a in ax + [axX, axY, axZ]:
+    for a in ax + axXY + [axZ]:
+        handles, labels = a.get_legend_handles_labels()
+        # Check artists existence to avoid plt warnings
+        if handles:
+            a.legend(handles, labels, loc="upper right", frameon=False)
         a.grid(True)
 
     # Draw navs/gt poses knots on t axis
     # scan_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_update_idxs]
-    # for a in ax + [axX, axY, axZ]:
+    # all_axs = ax + [axZ]
+    # if not xy_plot:
+    #     all_axs += axXY
+    # for a in all_axs:
     #     a.plot(scan_t, np.zeros_like(scan_t), '8r')
 
     # if gt2 is not None and len(gt2[0]):
     #     gt2_t = np.array(gt2[0]) - min_ts
-    #     for a in ax + [axX, axY, axZ]:
+    #     for a in all_axs:
     #         a.plot(gt2_t, np.ones_like(gt2_t), '8b')
 
     plt.show()
