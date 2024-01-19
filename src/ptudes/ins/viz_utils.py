@@ -27,8 +27,8 @@ def lio_ekf_graphs(lio_ekf,
 
     min_ts = lio_ekf._lg_t[0]
     # print(f"imu_ts: {min_ts}")
-    if lio_ekf._nav_scan_idxs:
-        nav_idx = lio_ekf._nav_scan_idxs[0]
+    if lio_ekf._nav_update_idxs:
+        nav_idx = lio_ekf._nav_update_idxs[0]
         # scan_ts = scan_begin_ts(lio_ekf._navs[nav_idx].scan)
         scan_ts = lio_ekf._navs_t[nav_idx]
         # print(f"scan_ts: {scan_ts}")
@@ -133,7 +133,7 @@ def lio_ekf_graphs(lio_ekf,
         a.grid(True)
 
     # Draw navs/gt poses knots on t axis
-    # scan_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_scan_idxs]
+    # scan_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_update_idxs]
     # for a in ax + [axX, axY, axZ]:
     #     a.plot(scan_t, np.zeros_like(scan_t), '8r')
 
@@ -227,7 +227,7 @@ def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
     for a in ax.flat:
         a.grid(True)
 
-    upd_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_scan_idxs]
+    upd_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_update_idxs]
 
     t = [t - min_ts for t in navs_t]
 
@@ -486,7 +486,7 @@ def lio_ekf_viz(lio_ekf):
             sample_axis[idx].enable()
 
     target_id = 0
-    target_idx = lio_ekf._nav_scan_idxs[target_id]
+    target_idx = lio_ekf._nav_update_idxs[target_id]
 
     set_cloud_from_idx(target_idx)
 
@@ -496,13 +496,13 @@ def lio_ekf_viz(lio_ekf):
             if target_idx in clouds:
                 clouds[target_idx].disable()
 
-            scans_num = len(lio_ekf._nav_scan_idxs)
+            scans_num = len(lio_ekf._nav_update_idxs)
             if mods == 0:
                 target_id = (target_id + 1) % scans_num
             elif mods == 1:
                 target_id = (target_id + scans_num - 1) % scans_num
 
-            target_idx = lio_ekf._nav_scan_idxs[target_id]
+            target_idx = lio_ekf._nav_update_idxs[target_id]
 
             target_nav = lio_ekf._navs[target_idx]
             print(f"TNAV[{target_idx}]: ", target_nav)
@@ -566,7 +566,7 @@ def lio_ekf_viz(lio_ekf):
             assert len(lio_ekf._navs) == len(lio_ekf._navs_pred)
             print(f"pred_nav[{target_idx}] = ", pred_nav)
             show_pos_att_uncertainty(pred_nav, pred_nav.cov)
-            # print("nav_scan_idxs = ", lio_ekf._nav_scan_idxs)
+            # print("nav_update_idxs = ", lio_ekf._nav_update_idxs)
             print("target_idx = ", target_idx)
             point_viz.update()
             #

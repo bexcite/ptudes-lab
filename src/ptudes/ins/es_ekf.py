@@ -69,8 +69,8 @@ class ESEKF:
         self._init_bg = init_bgyr
         self._init_grav = init_grav
 
-        self._initpos_std = np.diag([20.05, 20.05, 20.05])
-        self._initvel_std = np.diag([5.05, 5.05, 5.05])
+        self._initpos_std = np.diag([20.0, 20.0, 20.0])
+        self._initvel_std = np.diag([5.0, 5.0, 5.0])
         
         initatt_rpy_deg = np.array([15.0, 15.0, 15.5])
         initatt_rotvec = R.from_euler('XYZ', initatt_rpy_deg,
@@ -90,7 +90,7 @@ class ESEKF:
         # self._acc_vrw = 0.0043  # m/s^3 / sqrt(Hz)
         # self._gyr_arw = 0.000266  #  rad/s^2 / sqrt(Hz)
 
-        # TODO: select for Ouster IMU better ....
+        # TODO: selected for Ouster IMU, some guesses with tests
         self._acc_bias_std = 0.049  # m/s^2 / sqrt(Hz)
         self._gyr_bias_std = 0.38  # rad/s / sqrt(Hz)
         self._acc_vrw = 0.0043  # m/s^3 / sqrt(Hz)
@@ -146,9 +146,6 @@ class ESEKF:
 
         self._imu_initialized = False
 
-        # imu stats tracking
-        self._imus_acc_gyr = []
-
         # imu/nav state logging for viz/debugging
         self._lg_t = []
         self._lg_acc = []
@@ -157,7 +154,7 @@ class ESEKF:
         self._navs = []  # nav states (full, after the update on scan)
         self._navs_pred = []  # nav states (after the prediction and before the update)
         self._navs_t = []
-        self._nav_scan_idxs = []  # idxs to _navs with scans
+        self._nav_update_idxs = []  # idxs to _navs with scans/pose updates
 
 
     def processImu(self, imu: IMU) -> None:
@@ -175,8 +172,6 @@ class ESEKF:
             return
 
         self._nav_prev = deepcopy(self._nav_curr)
-
-        self._track_imu_stats(imu)
 
         self._insMech()
 
@@ -308,17 +303,6 @@ class ESEKF:
 
         # input()
 
-    # TODO: rewrite!
-    def _track_imu_stats(self, imu: IMU):
-        self._imus_acc_gyr.append(np.concatenate((imu.avel, imu.lacc)))
-
-    def _get_imu_stats(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Calc mean/std dev for acc and gyr"""
-        imus = np.array(self._imus_acc_gyr)
-        m = np.mean(imus, axis=0)
-        s = np.std(imus, axis=0)
-        return m, s
-
     def _reset_nav_err(self):
         self._nav_err.dpos = np.zeros(3)
         self._nav_err.dvel = np.zeros(3)
@@ -355,7 +339,7 @@ class ESEKF:
 
         self._navs += [store_nav]
         self._navs_t += [self._imu_curr.ts]
-        self._nav_scan_idxs += [len(self._navs) - 1]
-        # print("self._nav_scan_idxs = ", self._nav_scan_idxs)
+        self._nav_update_idxs += [len(self._navs) - 1]
+        # print("self._nav_update_idxs = ", self._nav_update_idxs)
 
         assert len(self._navs) == len(self._navs_pred)

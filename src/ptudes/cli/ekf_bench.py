@@ -154,7 +154,7 @@ def ptudes_ekf_sim(duration: float,
     print("Results:")
 
     print(f"processed duration: {ts - start_ts:0.04} s")
-    print(f"updates num: {len(ekf._nav_scan_idxs)}\n")
+    print(f"updates num: {len(ekf._nav_update_idxs)}\n")
 
     print("NAV GT:\n", ekf_gt._nav_curr)
     print("NAV:\n", ekf._nav_curr)
@@ -213,7 +213,7 @@ def ptudes_ekf_sim(duration: float,
 @click.option("-i",
               "--imu-topic",
               required=False,
-              default="/alphasense_driver_ros/imu",
+              default="/os_node/imu_packets",
               type=str,
               help="Imu topic name to use (msg/Imu or imu_packets)")
 def ptudes_ekf_nc(file: str,
@@ -235,6 +235,7 @@ def ptudes_ekf_nc(file: str,
     # NOTE: IMUs have different nav frames (ouster vs alphasense) ...
     if imu_topic in ["/os_cloud_node/imu", "/os_node/imu_packets"]:
         init_grav = GRAV * DOWN
+    print("init_grav = ", init_grav)
 
     print("Reading NC dataset:")
     print(f"  file: {file}")
@@ -259,22 +260,24 @@ def ptudes_ekf_nc(file: str,
     gt_t = []
     gt_poses = []
 
-    initialized = False
+    gt0_initialized = False
     dur_t = duration
     ts = 0
-    first_ts = 0
+    first_ts = -1
     for imu in imu_source:
         ts = imu.ts
-        if not initialized:
+        if first_ts < 0:
             first_ts = ts
-            initialized = True
 
         # skipping till the beginning (--start-ts)
         if ts - first_ts < start_ts:
+            continue
+
+        if not gt0_initialized:
             while pose_corr_idx < len(gts) and ts >= gts[pose_corr_idx][0]:
                 pose_corr_idx += 1
-                gt_pose0 = np.linalg.inv(gts[pose_corr_idx][1])
-            continue
+            gt_pose0 = np.linalg.inv(gts[pose_corr_idx][1])
+            gt0_initialized = True
 
         ekf.processImu(imu)
 
@@ -291,7 +294,7 @@ def ptudes_ekf_nc(file: str,
         if dur_t > 0 and ts - first_ts - start_ts > dur_t:
             break
 
-    nav_poses = [ekf._navs[i].pose_mat() for i in ekf._nav_scan_idxs]
+    nav_poses = [ekf._navs[i].pose_mat() for i in ekf._nav_update_idxs]
 
     print(f"scanned duration: {ts - first_ts - start_ts:0.04} s")
     print(f"updates num: {len(nav_poses)}\n")
@@ -557,7 +560,7 @@ def ptudes_ekf_ouster(file: str,
                 gt_poses.append(kiss_icp_pose)
             ############################
 
-            ekf._navs[-1].kiss_map = kiss_icp.local_map_points
+            # ekf._navs[-1].kiss_map = kiss_icp.local_map_points
             # ekf._navs[-1].xyz = xyz
 
             t_kiss += time.monotonic() - t1
@@ -593,6 +596,14 @@ def ptudes_ekf_ouster(file: str,
     if save_nc_gt_poses:
         save_poses_nc_gt_format(save_nc_gt_poses, t=gt_t, poses=res_poses)
         print(f"NC GT poses saved to: {save_nc_gt_poses}")
+
+
+    import matplotlib.pyplot as plt
+
+    # rel_t = np.array(kiss_icp._poses_ts) - kiss_icp._poses_ts[0]
+    # plt.plot(rel_t, kiss_icp._err_dt)
+    # plt.plot(rel_t, kiss_icp._err_drot)
+    # plt.show()
 
 
     if plot == "graphs":

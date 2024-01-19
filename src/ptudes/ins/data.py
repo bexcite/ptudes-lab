@@ -170,7 +170,7 @@ def _collect_navs_from_gt(ekf_gt, ekf) -> Tuple[List, List, List]:
     t_gt_it = iter(ekf_gt._navs_t[::-1])
     nav_gt = next(nav_gt_it)
     nav_gt_t = next(t_gt_it)
-    for nav_idx in ekf._nav_scan_idxs[::-1]:
+    for nav_idx in ekf._nav_update_idxs[::-1]:
         n = ekf._navs[nav_idx]
         n_t = ekf._navs_t[nav_idx]
         t.append(n_t)

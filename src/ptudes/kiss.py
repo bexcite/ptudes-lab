@@ -10,6 +10,7 @@ from kiss_icp.kiss_icp import KissICP
 from kiss_icp.config.parser import KISSConfig
 
 from ouster.sdk.pose_util import PoseH, log_pose
+from scipy.spatial.transform import Rotation
 
 Vec3 = np.ndarray
 
@@ -40,11 +41,14 @@ class KissICPWrapper:
                                         deskew=True,
                                         max_range=self._max_range)
         self._kiss_config.data.min_range = self._min_range
-        
+
         self._kiss = KissICP(config=self._kiss_config)
 
         # using last valid column timestamp as a pose ts
         self._poses_ts = []
+
+        self._err_dt = []
+        self._err_drot = []
 
     def register_frame(self,
                        scan: LidarScan,
@@ -55,10 +59,15 @@ class KissICPWrapper:
         xyz = self._xyz_lut(scan)[sel_flag]
         timestamps = self._timestamps[sel_flag]
 
-        self._kiss_register_frame(xyz, timestamps, initial_guess=initial_guess)
 
         # TODO[pb]: This could be done differently ...
         ts = client.last_valid_column_ts(scan) * 1e-09
+
+        self._kiss_register_frame(xyz,
+                                  timestamps,
+                                  ts,
+                                  initial_guess=initial_guess)
+
         self._poses_ts.append(ts)
 
         return self.pose
@@ -73,6 +82,7 @@ class KissICPWrapper:
     def _kiss_register_frame(self,
                              frame,
                              timestamps,
+                             ts: float,
                              initial_guess: Optional[PoseH] = None):
         # Apply motion compensation
         kself = self._kiss
@@ -101,6 +111,17 @@ class KissICPWrapper:
             max_correspondance_distance=3 * sigma,
             kernel=sigma / 3,
         )
+
+        pose_gain = np.linalg.inv(initial_guess) @ new_pose
+
+        dt = np.linalg.norm(pose_gain[:3, 3])
+        drot = np.linalg.norm(
+            Rotation.from_matrix(pose_gain[:3, :3]).as_rotvec())
+        
+        self._err_dt.append(dt)
+        self._err_drot.append(drot)
+
+        # print(f"dt = {dt:.05f}, drot = {drot:.05f}")
 
         kself.adaptive_threshold.update_model_deviation(np.linalg.inv(initial_guess) @ new_pose)
         kself.local_map.update(frame_downsample, new_pose)
