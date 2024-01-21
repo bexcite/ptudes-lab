@@ -98,7 +98,7 @@ def lio_ekf_graphs(ekf,
     axZ.set_ylabel("Z (m)")
     axZ.set_xlabel('t (s)')
 
-    def draw_gt(gtX, line_label: str = ""):
+    def draw_gt(gtX, min_ts: Optional[float] = 0, line_label: str = ""):
         if gtX is not None and len(gtX[0]):
             gt_t = np.array(gtX[0]) - min_ts
             gt_poses = np.array(gtX[1])
@@ -111,8 +111,12 @@ def lio_ekf_graphs(ekf,
                 axXY[1].plot(gt_t, gt_poses[:, 1, 3])
             axZ.plot(gt_t, gt_poses[:, 2, 3])
 
-    draw_gt(gt, line_label=labels[1] if len(labels) > 1 else "gt compare 1")
-    draw_gt(gt2, line_label=labels[2] if len(labels) > 2 else "gt compare 2")
+    draw_gt(gt,
+            min_ts=min_ts,
+            line_label=labels[1] if len(labels) > 1 else "gt compare 1")
+    draw_gt(gt2,
+            min_ts=min_ts,
+            line_label=labels[2] if len(labels) > 2 else "gt compare 2")
 
     for a in ax + axXY + [axZ]:
         handles, labels = a.get_legend_handles_labels()

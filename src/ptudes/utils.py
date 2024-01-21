@@ -338,6 +338,29 @@ def filter_nc_gt_by_close_ts(
     return res_nc_gt, res_gt_t
 
 
+def filter_nc_gt_by_cmp(
+        nc_gt,
+        nc_gt_cmp) -> Tuple[List[Tuple[float, np.ndarray]], List[Tuple[float, np.ndarray]]]:
+    """Find the closest subset of nc_gt_cmp in nc_gt poses."""
+
+    gt_cmp_t = [g[0] for g in nc_gt_cmp]
+
+    gt_matched, gt_cmp_t_matched = filter_nc_gt_by_close_ts(nc_gt, gt_cmp_t)
+    gt_cmp_poses_matched = []
+    idx = 0
+    for t_m in gt_cmp_t_matched:
+        while gt_cmp_t[idx] != t_m:
+            idx += 1
+        gt_cmp_poses_matched.append(nc_gt_cmp[idx][1])
+        idx += 1
+
+    assert len(gt_cmp_poses_matched) == len(gt_cmp_t_matched)
+
+    gt_cmp_matched = list(zip(gt_cmp_t_matched, gt_cmp_poses_matched))
+
+    return gt_matched, gt_cmp_matched
+
+
 def reduce_active_beams(ls: client.LidarScan, beams_num: int):
     """Reduces the active beams of a lidar scan to beams_num.
     

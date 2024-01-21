@@ -12,7 +12,7 @@ from ouster.sdk.util import resolve_metadata
 from ptudes.utils import (read_metadata_json, read_packet_source,
                           read_newer_college_gt, save_poses_kitti_format,
                           save_poses_nc_gt_format, filter_nc_gt_by_close_ts,
-                          reduce_active_beams)
+                          reduce_active_beams, filter_nc_gt_by_cmp)
 from ptudes.lio_ekf import LioEkfScans
 
 import numpy as np
@@ -683,6 +683,49 @@ def ptudes_ekf_ouster(file: str,
         print(f"WARNING: plot param '{plot}' doesn't supported")
 
 
+@click.command(name="cmp")
+@click.argument("gt_file", required=True, type=click.Path(exists=True))
+@click.argument("gt_file_cmp", required=True, type=click.Path(exists=True))
+@click.option("-p",
+              "--plot",
+              required=False,
+              type=str,
+              help="Plotting option [graphs, point_viz]")
+def ptudes_ekf_cmp(gt_file: str,
+                   gt_file_cmp: str,
+                   plot: Optional[str] = None) -> None:
+    """Compare trajectories in Newer College Dataset Formats"""
+
+    gts = read_newer_college_gt(gt_file)
+    gts_cmp = read_newer_college_gt(gt_file_cmp)
+
+    print("len(gts) = ", len(gts))
+    print("len(gts_cmp) = ", len(gts_cmp))
+
+    gts, gts_cmp = filter_nc_gt_by_cmp(gts, gts_cmp)
+
+    print("Matched:")
+    print("len(gts) = ", len(gts))
+    print("len(gts_cmp) = ", len(gts_cmp))
+
+    dts = [t2-t1 for (t1, _), (t2, _) in zip(gts, gts_cmp)]
+    print("dts = ", dts)
+
+    gts_pose0 = gts_cmp[0][1] @ np.linalg.inv(gts[0][1])
+    gts_poses = [gts_pose0 @ p for (_, p) in gts]
+    gts_cmp_poses = [p for (_, p) in gts_cmp]
+
+    ate_rot, ate_trans = calc_ate(gts_poses, gts_cmp_poses)
+    print(f"\nTraj poses comparisons ({len(gts_poses)} poses):")
+    print(f"ATE_rot:   {ate_rot:.04f} deg")
+    print(f"ATE trans: {ate_trans:.04f} m")
+
+    if plot == "graphs":
+        print("DO GRAPHS")
+
+
+
 ptudes_ekf_bench.add_command(ptudes_ekf_sim)
 ptudes_ekf_bench.add_command(ptudes_ekf_nc)
 ptudes_ekf_bench.add_command(ptudes_ekf_ouster)
+ptudes_ekf_bench.add_command(ptudes_ekf_cmp)
