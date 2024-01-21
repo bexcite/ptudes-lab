@@ -13,46 +13,24 @@ from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
                               GREY1_COLOR, WHITE_COLOR)
 
 
-def lio_ekf_graphs(lio_ekf,
+def lio_ekf_graphs(ekf,
                    xy_plot: bool = True,
                    gt: Optional[Tuple[List, List]] = None,
                    gt2: Optional[Tuple[List, List]] = None,
                    labels: List[str] = []):
     """Plots of imus (mainly) logs"""
 
-    min_ts = lio_ekf._lg_t[0]
-    # print(f"imu_ts: {min_ts}")
-    if lio_ekf._nav_update_idxs:
-        nav_idx = lio_ekf._nav_update_idxs[0]
-        # scan_ts = scan_begin_ts(lio_ekf._navs[nav_idx].scan)
-        scan_ts = lio_ekf._navs_t[nav_idx]
-        # print(f"scan_ts: {scan_ts}")
-        min_ts = min(min_ts, scan_ts)
-    # print(f"min_ts res: {min_ts}")
+    min_ts = ekf._navs_t[0]
 
-    t = [t - min_ts for t in lio_ekf._lg_t]
-    acc_x = [a[0] for a in lio_ekf._lg_acc]
-    acc_y = [a[1] for a in lio_ekf._lg_acc]
-    acc_z = [a[2] for a in lio_ekf._lg_acc]
+    t = np.array(ekf._lg_t) - min_ts
+    acc = np.array(ekf._lg_acc)
+    gyr = np.array(ekf._lg_gyr)
 
-    gyr_x = [a[0] for a in lio_ekf._lg_gyr]
-    gyr_y = [a[1] for a in lio_ekf._lg_gyr]
-    gyr_z = [a[2] for a in lio_ekf._lg_gyr]
+    ba = np.array([nav.bias_acc for nav in ekf._navs])
+    bg = np.array([nav.bias_gyr for nav in ekf._navs])
 
-    ba_x = [nav.bias_acc[0] for nav in lio_ekf._navs]
-    ba_y = [nav.bias_acc[1] for nav in lio_ekf._navs]
-    ba_z = [nav.bias_acc[2] for nav in lio_ekf._navs]
-
-    bg_x = [nav.bias_gyr[0] for nav in lio_ekf._navs]
-    bg_y = [nav.bias_gyr[1] for nav in lio_ekf._navs]
-    bg_z = [nav.bias_gyr[2] for nav in lio_ekf._navs]
-
-    nav_t = [nav_t - min_ts for nav_t in lio_ekf._navs_t]
-
-    pos = [nav.pos for nav in lio_ekf._navs]
-    pos_x = [p[0] for p in pos]
-    pos_y = [p[1] for p in pos]
-    pos_z = [p[2] for p in pos]
+    nav_t = np.array(ekf._navs_t) - min_ts
+    pos = np.array([nav.pos for nav in ekf._navs])
 
     fig = plt.figure()
     ax = [
@@ -74,26 +52,26 @@ def lio_ekf_graphs(lio_ekf,
         plt.setp(a.get_xticklabels(), visible=False)
 
     i = 0
-    ax[i].plot(t, acc_x, label="data (acc/gyr)")
-    ax[i].plot(nav_t, ba_x, label="bias (acc/gyr)")
+    ax[i].plot(t, acc[:, 0], label="data (acc/gyr)")
+    ax[i].plot(nav_t, ba[:, 0], label="bias (acc/gyr)")
     ax[i].legend(loc="upper right", frameon=False)
     ax[i].set_ylabel('acc_X')
-    ax[i + 1].plot(t, acc_y)
-    ax[i + 1].plot(nav_t, ba_y)
+    ax[i + 1].plot(t, acc[:, 1])
+    ax[i + 1].plot(nav_t, ba[:, 1])
     ax[i + 1].set_ylabel('acc_Y')
-    ax[i + 2].plot(t, acc_z)
-    ax[i + 2].plot(nav_t, ba_z)
+    ax[i + 2].plot(t, acc[:, 2])
+    ax[i + 2].plot(nav_t, ba[:, 2])
     ax[i + 2].set_ylabel('acc_Z')
 
     i = 3
-    ax[i].plot(t, gyr_x)
-    ax[i].plot(nav_t, bg_x)
+    ax[i].plot(t, gyr[:, 0])
+    ax[i].plot(nav_t, bg[:, 0])
     ax[i].set_ylabel('gyr_X')
-    ax[i + 1].plot(t, gyr_y)
-    ax[i + 1].plot(nav_t, bg_y)
+    ax[i + 1].plot(t, gyr[:, 1])
+    ax[i + 1].plot(nav_t, bg[:, 1])
     ax[i + 1].set_ylabel('gyr_Y')
-    ax[i + 2].plot(t, gyr_z)
-    ax[i + 2].plot(nav_t, bg_z)
+    ax[i + 2].plot(t, gyr[:, 2])
+    ax[i + 2].plot(nav_t, bg[:, 2])
     ax[i + 2].set_ylabel('gyr_Z')
     ax[i + 2].set_xlabel('t')
 
@@ -102,21 +80,21 @@ def lio_ekf_graphs(lio_ekf,
     axXY = []
     if xy_plot:
         aXY = fig.add_subplot(6, 3, (2, 12))
-        aXY.plot(pos_x, pos_y, label=main_label)
+        aXY.plot(pos[:, 0], pos[:, 1], label=main_label)
         aXY.set_xlabel("X (m)")
         aXY.set_ylabel("Y (m)")
         axXY.append(aXY)
     else:
         axX = fig.add_subplot(6, 3, (2, 6))
-        axX.plot(nav_t, pos_x, label=main_label)
+        axX.plot(nav_t, pos[:, 0], label=main_label)
         axX.legend(frameon=False)
         axX.grid(True)
         axY = fig.add_subplot(6, 3, (8, 12))
-        axY.plot(nav_t, pos_y)
+        axY.plot(nav_t, pos[:, 1])
         axXY.extend([axX, axY])
 
     axZ = fig.add_subplot(6, 3, (14, 18))
-    axZ.plot(nav_t, pos_z)
+    axZ.plot(nav_t, pos[:, 2])
     axZ.set_ylabel("Z (m)")
     axZ.set_xlabel('t (s)')
 
@@ -144,7 +122,7 @@ def lio_ekf_graphs(lio_ekf,
         a.grid(True)
 
     # Draw navs/gt poses knots on t axis
-    # scan_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_update_idxs]
+    # scan_t = [ekf._navs_t[si] - min_ts for si in ekf._nav_update_idxs]
     # all_axs = ax + [axZ]
     # if not xy_plot:
     #     all_axs += axXY
@@ -268,7 +246,6 @@ def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
         ax[i].plot(t, dreul_r)
         ax[i + 1].plot(t, dreul_p)
         ax[i + 2].plot(t, dreul_y)
-
 
     for idx, a in enumerate(ax.flat):
         a.plot(upd_t,

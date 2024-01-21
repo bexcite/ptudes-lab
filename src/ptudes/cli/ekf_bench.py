@@ -1,5 +1,6 @@
 """Error-state Extended Kalman Filter experiments"""
 from typing import Iterator
+from datetime import datetime
 import time
 import click
 from typing import Optional
@@ -589,12 +590,26 @@ def ptudes_ekf_ouster(file: str,
     if not ekf._navs:
         return
 
+
+    # log header for storing resulting poses
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    header = f"data path: {file}\n"
+    header += f"metadata path: {meta}\n\n"
+    header += f"scans range: {start_scan} - {end_scan} (scans/updates num: {len(gt_t)})\n"
+    header += f"kiss min/max: {kiss_min_range} - {kiss_max_range}\n"
+    header += f"use-imu-prediction: {use_imu_prediction}, ekf-pose-to-map: {ekf_pose_to_map}\n"
+    header += f"sensor: {info.prod_line}, {info.mode}\n"
+    header += f"time: {now}"
+
     if save_kitti_poses:
-        save_poses_kitti_format(save_kitti_poses, res_poses)
+        save_poses_kitti_format(save_kitti_poses, res_poses, header=header)
         print(f"Kitti poses saved to: {save_kitti_poses}")
 
     if save_nc_gt_poses:
-        save_poses_nc_gt_format(save_nc_gt_poses, t=gt_t, poses=res_poses)
+        save_poses_nc_gt_format(save_nc_gt_poses,
+                                t=gt_t,
+                                poses=res_poses,
+                                header=header)
         print(f"NC GT poses saved to: {save_nc_gt_poses}")
 
 
@@ -656,6 +671,7 @@ def ptudes_ekf_ouster(file: str,
                 # print("dts = ", dts)
         lio_ekf_graphs(
             ekf,
+            xy_plot=True,
             gt=(gt_t, gt_poses),
             gt2=gt2,
             labels=["ES EKF smoothed poses", "KissICP poses", "GT poses"])

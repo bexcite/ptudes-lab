@@ -17,6 +17,14 @@ from scipy.spatial.transform import Rotation
 
 from ptudes.bag import OusterRawBagSource
 
+# NC 2021 apply transform to move GT from base to Ouster IMU Nav frame
+# transforms from newer_college_2021/os_imu_lidar_transforms.yaml
+NC_OS_IMU_TO_OS_SENSOR = np.eye(4)
+NC_OS_IMU_TO_OS_SENSOR[:3, 3] = [-0.014, 0.012, 0.015]
+NC_OS_SENSOR_TO_BASE = np.eye(4)
+NC_OS_SENSOR_TO_BASE[:3, 3] = [0.001, 0.000, 0.091]
+NC_OS_IMU_TO_BASE = NC_OS_SENSOR_TO_BASE @ NC_OS_IMU_TO_OS_SENSOR
+
 def vee(vec: np.ndarray) -> np.ndarray:
     w = np.zeros((3, 3))
     w[0, 1] = -vec[2]
@@ -180,17 +188,27 @@ def read_packet_source(
 
 
 # heavily inspired by KissICP method
-def save_poses_kitti_format(filename: str, poses: List[np.ndarray]):
+def save_poses_kitti_format(filename: str,
+                            poses: List[np.ndarray],
+                            header: str = ""):
     kitti_format_poses = np.array(
         [np.concatenate((pose[0], pose[1], pose[2])) for pose in poses])
-    np.savetxt(fname=filename, X=kitti_format_poses)
+    np.savetxt(fname=filename, X=kitti_format_poses, header=header)
 
 
 def save_poses_nc_gt_format(filename: str, t: List[float],
-                            poses: List[np.ndarray]):
+                            poses: List[np.ndarray],
+                            header: str = ""):
     """Save odom result in the Newer College GT format for comparison."""
     t_arr = np.array(t)
     poses_arr = np.array(poses)
+
+    # saving in the BASE frame, assuming that incoming poses in IMU (nav frame)
+    # but for uesrs who care about save/recover functionality
+    # these transforms on save/restore essentially invariant (unless
+    # other read functions are used in other places with other assumptions)
+    os_base_to_imu = np.linalg.inv(NC_OS_IMU_TO_BASE)
+    poses_arr = np.einsum("nij,jk->nik", poses_arr, os_base_to_imu)
 
     res = np.zeros((len(t), 9))
     # secs
@@ -202,11 +220,21 @@ def save_poses_nc_gt_format(filename: str, t: List[float],
     # qx,qy,qz,qw
     res[:, 5:10] = Rotation.from_matrix(poses_arr[:, :3, :3]).as_quat()
 
-    np.savetxt(fname=filename, X=res, delimiter=", ")
+
+    data_spec = "sec,nsec,x,y,z,qx,qy,qz,qw"
+    if header:
+        header += "\n\n" + data_spec
+
+    np.savetxt(fname=filename, X=res, delimiter=", ", header=header)
 
 
-def read_newer_college_gt(data_path: str) -> List[Tuple[float, np.ndarray]]:
-    """Read ground truth poses for Newer College 2021 dataset"""
+def read_newer_college_gt(data_path: str, to_os_imu: bool = True) -> List[Tuple[float, np.ndarray]]:
+    """Read ground truth poses for Newer College 2021 dataset.
+    
+    Return:
+        List of tuples (ts, pose4x4), where pose4x4 converted to the Ouster
+        IMU NavFrame.
+    """
     gt_data = np.loadtxt(data_path, delimiter=",")
     ts = gt_data[:, 0] + gt_data[:, 1] * 1e-9
 
@@ -216,14 +244,10 @@ def read_newer_college_gt(data_path: str) -> List[Tuple[float, np.ndarray]]:
     rots = Rotation.from_quat(gt_data[:, 5:9]).as_matrix()
     pos[:, :3, :3] = rots
 
-    # NC 2021 apply transform to move GT from base to Ouster IMU Nav frame
-    os_imu_to_os_sensor = np.eye(4)
-    os_imu_to_os_sensor[:3, 3] = [-0.014, 0.012, 0.015]
-    os_sensor_to_base = np.eye(4)
-    os_sensor_to_base[:3, 3] = [0.001, 0.000, 0.091]
-    os_imu_to_base = os_sensor_to_base @ os_imu_to_os_sensor
+    if to_os_imu:
+        pos = np.einsum("nij,jk->nik", pos, NC_OS_IMU_TO_BASE)
 
-    return [(t, p @ os_imu_to_base) for t, p in zip(ts[:], pos[:])]
+    return [(t, p) for t, p in zip(ts[:], pos[:])]
 
 
 def filter_nc_gt_by_ts(
@@ -328,3 +352,45 @@ def reduce_active_beams(ls: client.LidarScan, beams_num: int):
     # clearing only range, because for all downstream processing tasks
     # it's usually enough to not look at any other pixels
     ls.field(client.ChanField.RANGE)[clean_mask, :] = 0
+
+
+def pose_scans_from_nc_gt(
+    source,
+    nc_gt_poses: str
+):
+    """Add poses to LidarScans stream Newer College Dataset ground truth poses.
+
+    Scans with timestamps outside of the timestamps in `nc_gt_poses` file are
+    skipped with a warning printed to stdout.
+
+    Args:
+        source: one of:
+            - Sequence[client.LidarScan] - single scan sources
+        nc_gt_poses: path to the file with in Newer College Dataset GT poses
+                     format
+    """
+    # load one pose per scan
+    gts = read_newer_college_gt(nc_gt_poses)
+
+    # # make time indexed poses starting from 0.5
+    traj_eval = pu.TrajectoryEvaluator(gts, time_bounds=1.5)
+
+    skipped_scans = 0
+
+    for obj in source:
+        if isinstance(obj, client.LidarScan):
+            # Iterator[client.LidarScan]
+            scan = obj
+
+            col_ts = scan.timestamp * 1e-9
+
+            try:
+                traj_eval(scan, col_ts=col_ts)
+            except ValueError as e:
+                skipped_scans += 1
+                continue
+
+            yield scan
+
+    print(f"NOTE: Therere where {skipped_scans} skipped scans that wasn't "
+          "because they were outside of the NC GT poses available")
