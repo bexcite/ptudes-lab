@@ -7,7 +7,7 @@ from scipy.spatial.transform import Rotation as R
 from ptudes.ins.data import GRAV, IMU, NavState,  set_blk, blk
 from ptudes.utils import vee
 
-# TODO: replace with scipy...Rotation
+# TODO: replace with scipy...Rotation?
 from ouster.sdk.pose_util import exp_rot_vec, log_rot_mat
 
 Vec3 = np.ndarray
@@ -46,6 +46,13 @@ class NavErrState:
 
 
 class ESEKF:
+    """Error State Extended Kalman Filter for IMU based odometry filters.
+
+    NOTE: !!! Work in progress, lot's of clean/up and interface changes
+          are needed. And it's done to test algos rather than be fast production
+          tool, for which you would want to offload ESEKF to the C++ with
+          corresponding bindings to Python.
+    """
 
     STATE_RANK = 18
     POS_ID = 0

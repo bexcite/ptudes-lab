@@ -12,6 +12,60 @@ from ptudes.ins.data import NavState, blk
 from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
                               GREY1_COLOR, WHITE_COLOR)
 
+def draw_poses_sets(axs,
+                    gts0,
+                    gts1: Optional[Tuple[List, List]] = None,
+                    gts2: Optional[Tuple[List, List]] = None,
+                    min_ts: float = 0,
+                    labels: List[str] = []):
+    assert len(axs) in [2, 3]
+
+    colors = ["g", "b", "r"]
+    for idx, gts in enumerate([gts0, gts1, gts2]):
+        if not gts:
+            continue
+        label = labels[idx] if idx < len(labels) else ""
+        color = colors[idx]
+
+        gts_t = np.array([t for (t, _) in gts]) - min_ts
+        gts_p = np.array([p for (_, p) in gts])
+
+        if len(axs) == 2:
+            axs[0].plot(gts_p[:, 0, 3], gts_p[:, 1, 3], color, label=label)
+            axs[0].set_xlabel("X (m)")
+            axs[0].set_ylabel("Y (m)")
+        elif len(axs) == 3:
+            axs[0].plot(gts_t, gts_p[:, 0, 3], color, label=label)
+            axs[1].plot(gts_t, gts_p[:, 1, 3], color)
+
+        # axZ = fig.add_subplot(6, 3, (14, 18))
+        axs[-1].plot(gts_t, gts_p[:, 2, 3], color)
+        axs[-1].set_ylabel("Z (m)")
+        axs[-1].set_xlabel('t (s)')
+
+    for a in axs:
+        handles, labels = a.get_legend_handles_labels()
+        # Check artists existence to avoid plt warnings
+        if handles:
+            a.legend(handles, labels, loc="upper right", frameon=False)
+        a.grid(True)
+
+
+def gt_poses_graphs(gts0, gts1, xy_plot: bool = False, labels: List[str] = []):
+    fig = plt.figure()
+    axs = []
+    if xy_plot:
+        axs.append(fig.add_subplot(3, 1, (1, 2)))
+        axs.append(fig.add_subplot(3, 1, 3))
+    else:
+        axs.extend([fig.add_subplot(3, 1, i + 1) for i in range(3)])
+
+    min_ts = min(gts0[0][0], gts1[0][0])
+
+    draw_poses_sets(axs, gts0, gts1, min_ts=min_ts, labels=labels)
+
+    plt.show()
+
 
 def lio_ekf_graphs(ekf,
                    xy_plot: bool = True,
@@ -30,7 +84,6 @@ def lio_ekf_graphs(ekf,
     bg = np.array([nav.bias_gyr for nav in ekf._navs])
 
     nav_t = np.array(ekf._navs_t) - min_ts
-    pos = np.array([nav.pos for nav in ekf._navs])
 
     fig = plt.figure()
     ax = [
@@ -80,45 +133,34 @@ def lio_ekf_graphs(ekf,
     axXY = []
     if xy_plot:
         aXY = fig.add_subplot(6, 3, (2, 12))
-        aXY.plot(pos[:, 0], pos[:, 1], label=main_label)
-        aXY.set_xlabel("X (m)")
-        aXY.set_ylabel("Y (m)")
         axXY.append(aXY)
     else:
         axX = fig.add_subplot(6, 3, (2, 6))
-        axX.plot(nav_t, pos[:, 0], label=main_label)
-        axX.legend(frameon=False)
-        axX.grid(True)
         axY = fig.add_subplot(6, 3, (8, 12))
-        axY.plot(nav_t, pos[:, 1])
         axXY.extend([axX, axY])
 
     axZ = fig.add_subplot(6, 3, (14, 18))
-    axZ.plot(nav_t, pos[:, 2])
-    axZ.set_ylabel("Z (m)")
-    axZ.set_xlabel('t (s)')
 
-    def draw_gt(gtX, min_ts: Optional[float] = 0, line_label: str = ""):
-        if gtX is not None and len(gtX[0]):
-            gt_t = np.array(gtX[0]) - min_ts
-            gt_poses = np.array(gtX[1])
-            if xy_plot:
-                axXY[0].plot(gt_poses[:, 0, 3],
-                             gt_poses[:, 1, 3],
-                             label=line_label)
-            else:
-                axXY[0].plot(gt_t, gt_poses[:, 0, 3], label=line_label)
-                axXY[1].plot(gt_t, gt_poses[:, 1, 3])
-            axZ.plot(gt_t, gt_poses[:, 2, 3])
+    axs = []
+    axs.extend(axXY)
+    axs.append(axZ)
 
-    draw_gt(gt,
-            min_ts=min_ts,
-            line_label=labels[1] if len(labels) > 1 else "gt compare 1")
-    draw_gt(gt2,
-            min_ts=min_ts,
-            line_label=labels[2] if len(labels) > 2 else "gt compare 2")
+    navs = [(t, nav.pose_mat()) for t, nav in zip(ekf._navs_t, ekf._navs)]
+    gts1 = None
+    if gt is not None:
+        gts1 = [(t, p) for t, p in zip(gt[0], gt[1])]
+    gts2 = None
+    if gt2 is not None:
+        gts2 = [(t, p) for t, p in zip(gt2[0], gt2[1])]
 
-    for a in ax + axXY + [axZ]:
+    draw_poses_sets(axs,
+                    gts0=navs,
+                    gts1=gts1,
+                    gts2=gts2,
+                    min_ts=min_ts,
+                    labels=labels)
+
+    for a in ax:
         handles, labels = a.get_legend_handles_labels()
         # Check artists existence to avoid plt warnings
         if handles:
@@ -270,16 +312,6 @@ def lio_ekf_viz(lio_ekf):
     from ptudes.viz_utils import PointCloud
     point_viz = make_point_viz(f"Traj: poses = {len(lio_ekf._navs)}",
                                show_origin=True)
-
-    # def next_scan_based_nav(navs: List[NavState], start_idx: int = 0) -> int:
-    #     ln = len(navs)
-    #     start_idx = (start_idx + ln) % ln
-    #     curr_idx = start_idx
-    #     while navs[curr_idx].scan is None:
-    #         curr_idx = (curr_idx + 1) % ln
-    #         if curr_idx == start_idx:
-    #             break
-    #     return curr_idx
 
     @dataclass
     class CloudsStruct:

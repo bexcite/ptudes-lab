@@ -13,7 +13,6 @@ from ptudes.utils import (read_metadata_json, read_packet_source,
                           read_newer_college_gt, save_poses_kitti_format,
                           save_poses_nc_gt_format, filter_nc_gt_by_close_ts,
                           reduce_active_beams, filter_nc_gt_by_cmp)
-from ptudes.lio_ekf import LioEkfScans
 
 import numpy as np
 import numpy.random as npr
@@ -21,7 +20,7 @@ from ptudes.ins.data import (IMU, GRAV, calc_ate, ekf_traj_ate,
                              _collect_navs_from_gt, StreamStatsTracker)
 from ptudes.ins.es_ekf import ESEKF
 from ptudes.ins.viz_utils import (lio_ekf_viz, lio_ekf_graphs,
-                                  lio_ekf_error_graphs)
+                                  lio_ekf_error_graphs, gt_poses_graphs)
 from ptudes.data import OusterLidarData, last_valid_packet_ts
 from ptudes.kiss import KissICPWrapper
 from tqdm import tqdm
@@ -129,8 +128,6 @@ def ptudes_ekf_sim(duration: float,
     ts = 0
     start_ts = 0
     last_corr_t = 0
-    # gt_t = []
-    # gt_poses = []
     for imu_ideal, imu_noisy in sim_imu(freq=freq,
                                         acc_noise_std=acc_noise_std,
                                         gyr_noise_std=gyr_noise_std):
@@ -146,8 +143,6 @@ def ptudes_ekf_sim(duration: float,
         if ts - last_corr_t > corr_t:
             ekf.processPose(ekf_gt._nav_curr.pose_mat())
             last_corr_t = ts
-            # gt_t.append(ts)
-            # gt_poses.append(ekf_gt._nav_curr.pose_mat())
 
         if ts - start_ts > dur_t:
             break
@@ -167,11 +162,9 @@ def ptudes_ekf_sim(duration: float,
     # get associated nav states with gt states and time
     gt_t, gt_navs, navs = _collect_navs_from_gt(ekf_gt, ekf)
     gt_poses = [nav.pose_mat() for nav in gt_navs]
-    print("gt_poses.shape = ", len(gt_poses))
 
     if plot == "graphs":
         lio_ekf_graphs(ekf, gt=(gt_t, gt_poses))
-        # lio_ekf_graphs(ekf_gt, gt=(gt_t, gt_poses))
         lio_ekf_error_graphs(ekf_gt, ekf)
     elif plot == "point_viz":
         lio_ekf_viz(ekf)
@@ -308,9 +301,10 @@ def ptudes_ekf_nc(file: str,
         return
 
     if plot == "graphs":
-        lio_ekf_graphs(ekf, gt=(gt_t, gt_poses))
-        # lio_ekf_graphs(ekf_gt)
-        # lio_ekf_error_graphs(ekf_gt, ekf)
+        lio_ekf_graphs(ekf,
+                       xy_plot=False,
+                       gt=(gt_t, gt_poses),
+                       labels=["ES EKF IMU + GT pose correction", "GT poses"])
     elif plot == "point_viz":
         lio_ekf_viz(ekf)
     elif not plot:
@@ -663,18 +657,16 @@ def ptudes_ekf_ouster(file: str,
                 gt_t = gt_t_matched
                 gt_poses = gt_poses_matched
 
-                # ate_rot, ate_trans = calc_ate(gt_poses, gt2_poses)
-                # print(f"ATE_rot:   {ate_rot:.04f} deg")
-                # print(f"ATE trans: {ate_trans:.04f} m")
-
                 # dts = [t2-t1 for t1, t2 in zip(gt_t_matched, gt2_t)]
                 # print("dts = ", dts)
-        lio_ekf_graphs(
-            ekf,
-            xy_plot=True,
-            gt=(gt_t, gt_poses),
-            gt2=gt2,
-            labels=["ES EKF smoothed poses", "KissICP poses", "GT poses"])
+        lio_ekf_graphs(ekf,
+                       xy_plot=True,
+                       gt=(gt_t, gt_poses),
+                       gt2=gt2,
+                       labels=[
+                           "ES EKF KissICP smoothed poses",
+                           "KissICP only poses", "GT poses"
+                       ])
     elif plot == "point_viz":
         lio_ekf_viz(ekf)
     elif not plot:
@@ -690,39 +682,51 @@ def ptudes_ekf_ouster(file: str,
               "--plot",
               required=False,
               type=str,
-              help="Plotting option [graphs, point_viz]")
+              help="Plotting option [graphs, graphs_full, point_viz]")
+@click.option('--use-gt-frame',
+              is_flag=True,
+              help="Use GT frame (i.e. align cmp poses to gt)")
 def ptudes_ekf_cmp(gt_file: str,
                    gt_file_cmp: str,
-                   plot: Optional[str] = None) -> None:
+                   plot: Optional[str] = None,
+                   use_gt_frame: bool = False) -> None:
     """Compare trajectories in Newer College Dataset Formats"""
 
-    gts = read_newer_college_gt(gt_file)
+    gts_all = read_newer_college_gt(gt_file)
     gts_cmp = read_newer_college_gt(gt_file_cmp)
 
-    print("len(gts) = ", len(gts))
-    print("len(gts_cmp) = ", len(gts_cmp))
+    gts, gts_cmp = filter_nc_gt_by_cmp(gts_all, gts_cmp)
 
-    gts, gts_cmp = filter_nc_gt_by_cmp(gts, gts_cmp)
+    # dts = [t2-t1 for (t1, _), (t2, _) in zip(gts, gts_cmp)]
+    # print("dts = ", dts)
 
-    print("Matched:")
-    print("len(gts) = ", len(gts))
-    print("len(gts_cmp) = ", len(gts_cmp))
-
-    dts = [t2-t1 for (t1, _), (t2, _) in zip(gts, gts_cmp)]
-    print("dts = ", dts)
-
-    gts_pose0 = gts_cmp[0][1] @ np.linalg.inv(gts[0][1])
-    gts_poses = [gts_pose0 @ p for (_, p) in gts]
-    gts_cmp_poses = [p for (_, p) in gts_cmp]
+    if not use_gt_frame:
+        # move gt poses to the cmp poses (i.e. align)
+        gts_pose0 = gts_cmp[0][1] @ np.linalg.inv(gts[0][1])
+        gts_poses = [gts_pose0 @ p for (_, p) in gts]
+        gts_cmp_poses = [p for (_, p) in gts_cmp]
+        gts = [(gts[i][0], gts_poses[i]) for i in range(len(gts))]
+        gts_all = [(t, gts_pose0 @ p) for t, p in gts_all]
+    else:
+        # move cmp poses to the gt poses (i.e. align)
+        gts_cmp_pose0 = gts[0][1] @ np.linalg.inv(gts_cmp[0][1])
+        gts_poses = [p for (_, p) in gts]
+        gts_cmp_poses = [gts_cmp_pose0 @ p for (_, p) in gts_cmp]
+        gts_cmp = [(gts_cmp[i][0], gts_cmp_poses[i]) for i in range(len(gts_cmp))]
 
     ate_rot, ate_trans = calc_ate(gts_poses, gts_cmp_poses)
     print(f"\nTraj poses comparisons ({len(gts_poses)} poses):")
     print(f"ATE_rot:   {ate_rot:.04f} deg")
     print(f"ATE trans: {ate_trans:.04f} m")
 
-    if plot == "graphs":
-        print("DO GRAPHS")
-
+    if plot in ["graphs", "graphs_full"]:
+        gt_poses_graphs(gts_all if plot == "graphs_full" else gts,
+                        gts_cmp,
+                        xy_plot=False,
+                        labels=["GT Poses", "Compare poses"])
+    elif plot == "point_viz":
+        print("PointViz view of the trajectories to compare NOT YET "
+              "IMPLEMENTED")
 
 
 ptudes_ekf_bench.add_command(ptudes_ekf_sim)
