@@ -19,8 +19,8 @@ import numpy.random as npr
 from ptudes.ins.data import (IMU, GRAV, calc_ate, ekf_traj_ate,
                              _collect_navs_from_gt, StreamStatsTracker)
 from ptudes.ins.es_ekf import ESEKF
-from ptudes.ins.viz_utils import (lio_ekf_viz, lio_ekf_graphs,
-                                  lio_ekf_error_graphs, gt_poses_graphs)
+from ptudes.ins.viz_utils import (ekf_viz, ekf_graphs,
+                                  ekf_error_graphs, gt_poses_graphs)
 from ptudes.data import OusterLidarData, last_valid_packet_ts
 from ptudes.kiss import KissICPWrapper
 from tqdm import tqdm
@@ -164,10 +164,10 @@ def ptudes_ekf_sim(duration: float,
     gt_poses = [nav.pose_mat() for nav in gt_navs]
 
     if plot == "graphs":
-        lio_ekf_graphs(ekf, gt=(gt_t, gt_poses))
-        lio_ekf_error_graphs(ekf_gt, ekf)
+        ekf_graphs(ekf, gt=(gt_t, gt_poses))
+        ekf_error_graphs(ekf_gt, ekf)
     elif plot == "point_viz":
-        lio_ekf_viz(ekf)
+        ekf_viz(ekf)
     elif not plot:
         return
     else:
@@ -301,12 +301,12 @@ def ptudes_ekf_nc(file: str,
         return
 
     if plot == "graphs":
-        lio_ekf_graphs(ekf,
-                       xy_plot=False,
-                       gt=(gt_t, gt_poses),
-                       labels=["ES EKF IMU + GT pose correction", "GT poses"])
+        ekf_graphs(ekf,
+                   xy_plot=False,
+                   gt=(gt_t, gt_poses),
+                   labels=["ES EKF IMU + GT pose correction", "GT poses"])
     elif plot == "point_viz":
-        lio_ekf_viz(ekf)
+        ekf_viz(ekf)
     elif not plot:
         return
     else:
@@ -659,16 +659,16 @@ def ptudes_ekf_ouster(file: str,
 
                 # dts = [t2-t1 for t1, t2 in zip(gt_t_matched, gt2_t)]
                 # print("dts = ", dts)
-        lio_ekf_graphs(ekf,
-                       xy_plot=True,
-                       gt=(gt_t, gt_poses),
-                       gt2=gt2,
-                       labels=[
-                           "ES EKF KissICP smoothed poses",
-                           "KissICP only poses", "GT poses"
-                       ])
+        ekf_graphs(ekf,
+                   xy_plot=True,
+                   gt=(gt_t, gt_poses),
+                   gt2=gt2,
+                   labels=[
+                       "ES EKF KissICP smoothed poses", "KissICP only poses",
+                       "GT poses"
+                   ])
     elif plot == "point_viz":
-        lio_ekf_viz(ekf)
+        ekf_viz(ekf)
     elif not plot:
         return
     else:

@@ -67,11 +67,11 @@ def gt_poses_graphs(gts0, gts1, xy_plot: bool = False, labels: List[str] = []):
     plt.show()
 
 
-def lio_ekf_graphs(ekf,
-                   xy_plot: bool = True,
-                   gt: Optional[Tuple[List, List]] = None,
-                   gt2: Optional[Tuple[List, List]] = None,
-                   labels: List[str] = []):
+def ekf_graphs(ekf,
+               xy_plot: bool = True,
+               gt: Optional[Tuple[List, List]] = None,
+               gt2: Optional[Tuple[List, List]] = None,
+               labels: List[str] = []):
     """Plots of imus (mainly) logs"""
 
     min_ts = ekf._navs_t[0]
@@ -192,25 +192,25 @@ def euler_angles_diff(nav1: NavState, nav2: NavState) -> np.ndarray:
     return diff
 
 
-def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
+def ekf_error_graphs(ekf_gt, ekf, ekf_dr=None):
     """Plots of pos/angle errors"""
 
-    assert set(lio_ekf_gt._navs_t) == set(lio_ekf._navs_t)
+    assert set(ekf_gt._navs_t) == set(ekf._navs_t)
 
     dr_present = False
-    if lio_ekf_dr is not None:
+    if ekf_dr is not None:
         dr_present = True
-        assert set(lio_ekf_gt._navs_t) == set(lio_ekf_dr._navs_t)
+        assert set(ekf_gt._navs_t) == set(ekf_dr._navs_t)
 
     # remove navs dupes due to update navs in the list
     navs_gt = []
     navs = []
     navs_dr = []
-    navs_t = sorted(list(set(lio_ekf_gt._navs_t)))
-    ngt_it = iter(zip(lio_ekf_gt._navs_t[::-1], lio_ekf_gt._navs[::-1]))
-    n_it = iter(zip(lio_ekf._navs_t[::-1], lio_ekf._navs[::-1]))
+    navs_t = sorted(list(set(ekf_gt._navs_t)))
+    ngt_it = iter(zip(ekf_gt._navs_t[::-1], ekf_gt._navs[::-1]))
+    n_it = iter(zip(ekf._navs_t[::-1], ekf._navs[::-1]))
     if dr_present:
-        ndr_it = iter(zip(lio_ekf_dr._navs_t[::-1], lio_ekf_dr._navs[::-1]))
+        ndr_it = iter(zip(ekf_dr._navs_t[::-1], ekf_dr._navs[::-1]))
     try:
         ngt_t, ngt = next(ngt_it)
         n_t, n = next(n_it)
@@ -265,7 +265,7 @@ def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
     for a in ax.flat:
         a.grid(True)
 
-    upd_t = [lio_ekf._navs_t[si] - min_ts for si in lio_ekf._nav_update_idxs]
+    upd_t = [ekf._navs_t[si] - min_ts for si in ekf._nav_update_idxs]
 
     t = [t - min_ts for t in navs_t]
 
@@ -304,13 +304,13 @@ def lio_ekf_error_graphs(lio_ekf_gt, lio_ekf, lio_ekf_dr=None):
     plt.show()
 
 
-def lio_ekf_viz(lio_ekf):
+def ekf_viz(ekf):
     """Visualize 3D poses and nav state histories"""
 
     import ouster.viz as viz
     from ptudes.utils import (make_point_viz)
     from ptudes.viz_utils import PointCloud
-    point_viz = make_point_viz(f"Traj: poses = {len(lio_ekf._navs)}",
+    point_viz = make_point_viz(f"Traj: poses = {len(ekf._navs)}",
                                show_origin=True)
 
     @dataclass
@@ -387,7 +387,7 @@ def lio_ekf_viz(lio_ekf):
 
     def set_cloud_from_idx(idx: int):
         nonlocal clouds
-        nav = lio_ekf._navs[idx]
+        nav = ekf._navs[idx]
         # if nav.scan is None:
         #     return
         if idx not in clouds:
@@ -462,7 +462,7 @@ def lio_ekf_viz(lio_ekf):
             viz.AxisWithLabel(point_viz, length=0.2, thickness=1, enabled=True)
         ]
 
-    for idx, nav in enumerate(lio_ekf._navs):
+    for idx, nav in enumerate(ekf._navs):
         pose_mat = nav.pose_mat()
         axis_length = 0.5 if nav.update is not None else 0.1
         # axis_label = f"{idx}" if nav.scan is not None else ""
@@ -500,7 +500,7 @@ def lio_ekf_viz(lio_ekf):
 
         sample_cloud.points = points
 
-        rot_cov = blk(cov, lio_ekf.PHI_ID, lio_ekf.PHI_ID, 3)
+        rot_cov = blk(cov, ekf.PHI_ID, ekf.PHI_ID, 3)
 
         es = np.random.multivariate_normal(mean=np.zeros(3),
                                            cov=rot_cov,
@@ -513,7 +513,7 @@ def lio_ekf_viz(lio_ekf):
             sample_axis[idx].enable()
 
     target_id = 0
-    target_idx = lio_ekf._nav_update_idxs[target_id]
+    target_idx = ekf._nav_update_idxs[target_id]
 
     set_cloud_from_idx(target_idx)
 
@@ -523,21 +523,21 @@ def lio_ekf_viz(lio_ekf):
             if target_idx in clouds:
                 clouds[target_idx].disable()
 
-            scans_num = len(lio_ekf._nav_update_idxs)
+            scans_num = len(ekf._nav_update_idxs)
             if mods == 0:
                 target_id = (target_id + 1) % scans_num
             elif mods == 1:
                 target_id = (target_id + scans_num - 1) % scans_num
 
-            target_idx = lio_ekf._nav_update_idxs[target_id]
+            target_idx = ekf._nav_update_idxs[target_id]
 
-            target_nav = lio_ekf._navs[target_idx]
+            target_nav = ekf._navs[target_idx]
             print(f"TNAV[{target_idx}]: ", target_nav)
             # point_viz.camera.set_target(
             #     np.linalg.inv(target_nav.pose_mat()))
             point_viz.camera.set_target(np.linalg.inv(target_nav.kiss_pose))
             set_cloud_from_idx(target_idx)
-            pred_nav = lio_ekf._navs_pred[target_idx]
+            pred_nav = ekf._navs_pred[target_idx]
             show_pos_att_uncertainty(pred_nav, pred_nav.cov)
             point_viz.update()
         elif key == ord('V'):
@@ -585,21 +585,21 @@ def lio_ekf_viz(lio_ekf):
             # sample points from distribution
             # marginalize on pos (and eevrything at mean)
             # after prediction (pre update from lidar scan)
-            pred_nav = lio_ekf._navs_pred[target_idx]
-            # for idx, pn in enumerate(lio_ekf._navs):
+            pred_nav = ekf._navs_pred[target_idx]
+            # for idx, pn in enumerate(ekf._navs):
             #     print(f"_navs[{idx}] = ", pn)
-            # for idx, pn in enumerate(lio_ekf._navs_pred):
+            # for idx, pn in enumerate(ekf._navs_pred):
             #     print(f"navs_pred[{idx}] = ", pn)
-            assert len(lio_ekf._navs) == len(lio_ekf._navs_pred)
+            assert len(ekf._navs) == len(ekf._navs_pred)
             print(f"pred_nav[{target_idx}] = ", pred_nav)
             show_pos_att_uncertainty(pred_nav, pred_nav.cov)
-            # print("nav_update_idxs = ", lio_ekf._nav_update_idxs)
+            # print("nav_update_idxs = ", ekf._nav_update_idxs)
             print("target_idx = ", target_idx)
             point_viz.update()
             #
         elif key == 93:  # "}"
             # after update
-            upd_nav = lio_ekf._navs[target_idx]
+            upd_nav = ekf._navs[target_idx]
             print(f"upd_nav[{target_idx}] = ", upd_nav)
             show_pos_att_uncertainty(upd_nav, upd_nav.cov)
             point_viz.update()
@@ -609,7 +609,7 @@ def lio_ekf_viz(lio_ekf):
 
     point_viz.push_key_handler(handle_keys)
 
-    target_nav = lio_ekf._navs[target_idx]
+    target_nav = ekf._navs[target_idx]
     point_viz.camera.set_target(np.linalg.inv(target_nav.pose_mat()))
 
     point_viz.update()

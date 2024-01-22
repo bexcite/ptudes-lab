@@ -26,8 +26,8 @@ from ptudes.ins.data import GRAV, IMU, NavState, set_blk, blk
 
 from ptudes.utils import read_newer_college_gt, vee
 
-from ptudes.ins.viz_utils import (lio_ekf_graphs, lio_ekf_error_graphs,
-                                  lio_ekf_viz)
+from ptudes.ins.viz_utils import (ekf_graphs, ekf_error_graphs,
+                                  ekf_viz)
 
 from ptudes.ins.es_ekf import ESEKF
 
@@ -1514,20 +1514,20 @@ class LioEkfScans(client.ScanSource):
         print("  acc  std = ", imu_stats[1][3:])
 
         if self._plotting == "graphs":
-            lio_ekf_graphs(self._lio_ekf)
-            lio_ekf_graphs(self._es_ekf)
-            lio_ekf_error_graphs(self._lio_ekf, self._es_ekf)
-            lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
-            # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr, self._lio_ekf)
+            ekf_graphs(self._lio_ekf)
+            ekf_graphs(self._es_ekf)
+            ekf_error_graphs(self._lio_ekf, self._es_ekf)
+            ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
+            # ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr, self._lio_ekf)
 
-            # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
-            # lio_ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr)
-            # lio_ekf_graphs(self._lio_ekf_gt)
-            # lio_ekf_graphs(self._lio_ekf)
+            # ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf)
+            # ekf_error_graphs(self._lio_ekf_gt, self._lio_ekf_corr)
+            # ekf_graphs(self._lio_ekf_gt)
+            # ekf_graphs(self._lio_ekf)
         elif self._plotting == "point_viz":
-            # lio_ekf_viz(self._lio_ekf_gt)
-            lio_ekf_viz(self._lio_ekf)
-            # lio_ekf_viz(self._lio_ekf_corr)
+            # ekf_viz(self._lio_ekf_gt)
+            ekf_viz(self._lio_ekf)
+            # ekf_viz(self._lio_ekf_corr)
         else:
             print(f"WARNING: plotting param '{self._plotting}' doesn't "
                   f"supported")
