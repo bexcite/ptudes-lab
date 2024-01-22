@@ -60,3 +60,5 @@ def ptudes_viz(file: str, meta: Optional[str],
     point_viz = PointViz("Ptudes Viz")
     ls_viz = LidarScanViz(scans_source.metadata, viz=point_viz)
     SimpleViz(ls_viz, rate=rate, on_eof="stop").run(scans)
+
+    print(f"Scans produced: {scans_source._scans_produced}")
