@@ -250,44 +250,6 @@ def read_newer_college_gt(data_path: str, to_os_imu: bool = True) -> List[Tuple[
     return [(t, p) for t, p in zip(ts[:], pos[:])]
 
 
-def filter_nc_gt_by_ts(
-        nc_gt,
-        min_ts: Optional[float] = None,
-        max_ts: Optional[float] = None) -> List[Tuple[float, np.ndarray]]:
-    if not len(nc_gt):
-        return nc_gt
-    if min_ts is None:
-        min_ts = nc_gt[0][0]
-    if max_ts is None:
-        max_ts = nc_gt[-1][0]
-    res = []
-    idx = 0
-    # assume nc_gt poses are non-decreasing
-    while idx < len(nc_gt) and nc_gt[idx][0] < min_ts:
-        idx += 1
-
-    # print("min1 = ", abs(nc_gt[idx - 1][0] - min_ts))
-    # print("min2 = ", abs(nc_gt[idx][0] - min_ts))
-    if (idx > 0
-            and abs(nc_gt[idx - 1][0] - min_ts) < abs(nc_gt[idx][0] - min_ts)):
-        # print("min min = ", abs(nc_gt[idx - 1][0] - min_ts))
-        idx -= 1
-
-    while idx < len(nc_gt) and nc_gt[idx][0] <= max_ts:
-        res.append(nc_gt[idx])
-        idx += 1
-
-    # if idx < len(nc_gt):
-    #     print("max1 = ", abs(nc_gt[idx][0] - max_ts))
-    #     print("max2 = ", abs(nc_gt[idx - 1][0] - max_ts))
-    if (idx < len(nc_gt) and idx > 0
-            and abs(nc_gt[idx][0] - max_ts) < abs(nc_gt[idx - 1][0] - max_ts)):
-        # print("max max = ", abs(nc_gt[idx][0] - max_ts))
-        res.append(nc_gt[idx])
-
-    return res
-
-
 def filter_nc_gt_by_close_ts(
         nc_gt,
         gt_t) -> Tuple[List[Tuple[float, np.ndarray]], List[float]]:

@@ -34,9 +34,7 @@ class IMU:
 @dataclass
 class NavState:
     pos: np.ndarray = np.zeros(3)    # Vec3
-    # att_v: np.ndarray = np.zeros(3)
     att_q: np.ndarray = np.array([0, 0, 0, 1])  # Quat, xyzw
-    # att_h: np.ndarray = np.eye(3)    # Mat3x3, SO(3)
     vel: np.ndarray = np.zeros(3)    # Vec3
 
     bias_gyr: np.ndarray = np.zeros(3)  # Vec3
