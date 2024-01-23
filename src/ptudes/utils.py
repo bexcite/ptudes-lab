@@ -1,4 +1,4 @@
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Tuple
 
 import os
 import glob
@@ -13,7 +13,28 @@ import ouster.pcap as pcap
 from ouster.viz import (PointViz, ScansAccumulator, add_default_controls)
 import ouster.sdk.pose_util as pu
 
+from scipy.spatial.transform import Rotation
+
 from ptudes.bag import OusterRawBagSource
+
+# NC 2021 apply transform to move GT from base to Ouster IMU Nav frame
+# transforms from newer_college_2021/os_imu_lidar_transforms.yaml
+NC_OS_IMU_TO_OS_SENSOR = np.eye(4)
+NC_OS_IMU_TO_OS_SENSOR[:3, 3] = [-0.014, 0.012, 0.015]
+NC_OS_SENSOR_TO_BASE = np.eye(4)
+NC_OS_SENSOR_TO_BASE[:3, 3] = [0.001, 0.000, 0.091]
+NC_OS_IMU_TO_BASE = NC_OS_SENSOR_TO_BASE @ NC_OS_IMU_TO_OS_SENSOR
+
+def vee(vec: np.ndarray) -> np.ndarray:
+    w = np.zeros((3, 3))
+    w[0, 1] = -vec[2]
+    w[0, 2] = vec[1]
+    w[1, 0] = vec[2]
+    w[1, 2] = -vec[0]
+    w[2, 0] = -vec[1]
+    w[2, 1] = vec[0]
+    return w
+
 
 def spin(pviz: PointViz,
          on_update: Callable[[PointViz, float], None],
@@ -164,3 +185,197 @@ def read_packet_source(
         bags_paths = sorted(
             [Path(p) for p in glob.glob(str(Path(file) / "*.bag"))])
         return OusterRawBagSource(bags_paths, meta)
+
+
+# heavily inspired by KissICP method
+def save_poses_kitti_format(filename: str,
+                            poses: List[np.ndarray],
+                            header: str = ""):
+    kitti_format_poses = np.array(
+        [np.concatenate((pose[0], pose[1], pose[2])) for pose in poses])
+    np.savetxt(fname=filename, X=kitti_format_poses, header=header)
+
+
+def save_poses_nc_gt_format(filename: str, t: List[float],
+                            poses: List[np.ndarray],
+                            header: str = ""):
+    """Save odom result in the Newer College GT format for comparison."""
+    t_arr = np.array(t)
+    poses_arr = np.array(poses)
+
+    # saving in the BASE frame, assuming that incoming poses in IMU (nav frame)
+    # but for uesrs who care about save/recover functionality
+    # these transforms on save/restore essentially invariant (unless
+    # other read functions are used in other places with other assumptions)
+    os_base_to_imu = np.linalg.inv(NC_OS_IMU_TO_BASE)
+    poses_arr = np.einsum("nij,jk->nik", poses_arr, os_base_to_imu)
+
+    res = np.zeros((len(t), 9))
+    # secs
+    res[:, 0] = np.floor(t_arr)
+    # nsecs
+    res[:, 1] = np.floor((t_arr - res[:, 0]) * 1e+9)
+    # x,y,z
+    res[:, 2:5] = poses_arr[:, :3, 3]
+    # qx,qy,qz,qw
+    res[:, 5:10] = Rotation.from_matrix(poses_arr[:, :3, :3]).as_quat()
+
+
+    data_spec = "sec,nsec,x,y,z,qx,qy,qz,qw"
+    if header:
+        header += "\n\n" + data_spec
+
+    np.savetxt(fname=filename, X=res, delimiter=", ", header=header)
+
+
+def read_newer_college_gt(data_path: str, to_os_imu: bool = True) -> List[Tuple[float, np.ndarray]]:
+    """Read ground truth poses for Newer College 2021 dataset.
+    
+    Return:
+        List of tuples (ts, pose4x4), where pose4x4 converted to the Ouster
+        IMU NavFrame.
+    """
+    gt_data = np.loadtxt(data_path, delimiter=",")
+    ts = gt_data[:, 0] + gt_data[:, 1] * 1e-9
+
+    pos = np.tile(np.eye(4), reps=(gt_data.shape[0], 1, 1))
+    pos[:, :3, 3] = gt_data[:, 2:5]
+
+    rots = Rotation.from_quat(gt_data[:, 5:9]).as_matrix()
+    pos[:, :3, :3] = rots
+
+    if to_os_imu:
+        pos = np.einsum("nij,jk->nik", pos, NC_OS_IMU_TO_BASE)
+
+    return [(t, p) for t, p in zip(ts[:], pos[:])]
+
+
+def filter_nc_gt_by_close_ts(
+        nc_gt,
+        gt_t) -> Tuple[List[Tuple[float, np.ndarray]], List[float]]:
+    if not len(nc_gt):
+        return nc_gt
+    if not len(gt_t):
+        return []
+
+    # assuming non-decreasing timestamps
+    nc_t = [g[0] for g in nc_gt]
+    min_nc_t = np.min(np.array(nc_t[1:]) - np.array(nc_t[:-1]))
+    min_gt_t = np.min(np.array(gt_t[1:]) - np.array(gt_t[:-1]))
+    min_dt = min(min_nc_t, min_gt_t)
+
+    res_nc_gt = []
+    res_gt_t = []
+
+    nc_gt_it = iter(nc_gt)
+    gt_t_it = iter(gt_t)
+
+    n_t = next(nc_gt_it)
+    g_t = next(gt_t_it)
+
+    while True:
+        try:
+            while abs(n_t[0] - g_t) > min_dt:
+                while n_t[0] < g_t - min_dt:
+                    n_t = next(nc_gt_it)
+                while g_t < n_t[0] - min_dt:
+                    g_t = next(gt_t_it)
+            if n_t[0] < g_t:
+                n_t2 = next(nc_gt_it)
+                if abs(n_t[0] - g_t) < abs(n_t2[0] - g_t):
+                    res_nc_gt.append(n_t)
+                    res_gt_t.append(g_t)
+                    n_t = n_t2
+                    g_t = next(gt_t_it)
+            elif g_t <= n_t[0]:
+                g_t2 = next(gt_t_it)
+                if abs(n_t[0] - g_t) < abs(n_t[0] - g_t2):
+                    res_nc_gt.append(n_t)
+                    res_gt_t.append(g_t)
+                    n_t = next(nc_gt_it)
+                    g_t = g_t2
+        except StopIteration:
+            break
+
+    return res_nc_gt, res_gt_t
+
+
+def filter_nc_gt_by_cmp(
+        nc_gt,
+        nc_gt_cmp) -> Tuple[List[Tuple[float, np.ndarray]], List[Tuple[float, np.ndarray]]]:
+    """Find the closest subset of nc_gt_cmp in nc_gt poses."""
+
+    gt_cmp_t = [g[0] for g in nc_gt_cmp]
+
+    gt_matched, gt_cmp_t_matched = filter_nc_gt_by_close_ts(nc_gt, gt_cmp_t)
+    gt_cmp_poses_matched = []
+    idx = 0
+    for t_m in gt_cmp_t_matched:
+        while gt_cmp_t[idx] != t_m:
+            idx += 1
+        gt_cmp_poses_matched.append(nc_gt_cmp[idx][1])
+        idx += 1
+
+    assert len(gt_cmp_poses_matched) == len(gt_cmp_t_matched)
+
+    gt_cmp_matched = list(zip(gt_cmp_t_matched, gt_cmp_poses_matched))
+
+    return gt_matched, gt_cmp_matched
+
+
+def reduce_active_beams(ls: client.LidarScan, beams_num: int):
+    """Reduces the active beams of a lidar scan to beams_num.
+    
+    Achieved by setting RANGE field to 0 of 'inactive' beams. 
+    
+    Args:
+        beams_num: number of uniformaly distributed active beams
+    """
+    beam_idxs = np.linspace(0, ls.h, num=beams_num, endpoint=False, dtype=int)
+    clean_mask = np.ones(ls.h, dtype=bool)
+    clean_mask[beam_idxs] = 0
+    # clearing only range, because for all downstream processing tasks
+    # it's usually enough to not look at any other pixels
+    ls.field(client.ChanField.RANGE)[clean_mask, :] = 0
+
+
+def pose_scans_from_nc_gt(
+    source,
+    nc_gt_poses: str
+):
+    """Add poses to LidarScans stream Newer College Dataset ground truth poses.
+
+    Scans with timestamps outside of the timestamps in `nc_gt_poses` file are
+    skipped with a warning printed to stdout.
+
+    Args:
+        source: one of:
+            - Sequence[client.LidarScan] - single scan sources
+        nc_gt_poses: path to the file with in Newer College Dataset GT poses
+                     format
+    """
+    # load one pose per scan
+    gts = read_newer_college_gt(nc_gt_poses)
+
+    # # make time indexed poses starting from 0.5
+    traj_eval = pu.TrajectoryEvaluator(gts, time_bounds=1.5)
+
+    skipped_scans = 0
+
+    for obj in source:
+        if isinstance(obj, client.LidarScan):
+            # Iterator[client.LidarScan]
+            scan = obj
+
+            col_ts = scan.timestamp * 1e-9
+
+            try:
+                traj_eval(scan, col_ts=col_ts)
+            except ValueError as e:
+                skipped_scans += 1
+                continue
+
+            yield scan
+
+    print(f"NOTE: Therere where {skipped_scans} skipped scans that wasn't "
+          "because they were outside of the NC GT poses available")
