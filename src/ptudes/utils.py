@@ -228,7 +228,9 @@ def save_poses_nc_gt_format(filename: str, t: List[float],
     np.savetxt(fname=filename, X=res, delimiter=", ", header=header)
 
 
-def read_newer_college_gt(data_path: str, to_os_imu: bool = True) -> List[Tuple[float, np.ndarray]]:
+def read_newer_college_gt(
+        data_path: str,
+        to_os_imu: bool = True) -> List[Tuple[float, np.ndarray]]:
     """Read ground truth poses for Newer College 2021 dataset.
     
     Return:
@@ -301,8 +303,8 @@ def filter_nc_gt_by_close_ts(
 
 
 def filter_nc_gt_by_cmp(
-        nc_gt,
-        nc_gt_cmp) -> Tuple[List[Tuple[float, np.ndarray]], List[Tuple[float, np.ndarray]]]:
+    nc_gt, nc_gt_cmp
+) -> Tuple[List[Tuple[float, np.ndarray]], List[Tuple[float, np.ndarray]]]:
     """Find the closest subset of nc_gt_cmp in nc_gt poses."""
 
     gt_cmp_t = [g[0] for g in nc_gt_cmp]
@@ -341,7 +343,8 @@ def reduce_active_beams(ls: client.LidarScan, beams_num: int):
 
 def pose_scans_from_nc_gt(
     source,
-    nc_gt_poses: str
+    nc_gt_poses_file: Optional[str] = None,
+    nc_gt_poses: Optional[List[Tuple[float, pu.PoseH]]] = None
 ):
     """Add poses to LidarScans stream Newer College Dataset ground truth poses.
 
@@ -351,11 +354,15 @@ def pose_scans_from_nc_gt(
     Args:
         source: one of:
             - Sequence[client.LidarScan] - single scan sources
-        nc_gt_poses: path to the file with in Newer College Dataset GT poses
-                     format
+        nc_gt_poses_file: path to the file with in Newer College Dataset GT poses
+                          format
+        nc_gt_poses: list of tuples (ts, pose)
     """
     # load one pose per scan
-    gts = read_newer_college_gt(nc_gt_poses)
+    if nc_gt_poses_file:
+        gts = read_newer_college_gt(nc_gt_poses_file)
+    elif nc_gt_poses is not None:
+        gts = nc_gt_poses
 
     # # make time indexed poses starting from 0.5
     traj_eval = pu.TrajectoryEvaluator(gts, time_bounds=1.5)

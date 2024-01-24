@@ -60,7 +60,14 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
     """Flyby 3d visualizer over the lidar scans with poses.
 
     Data is provided via FILE in Ouster raw packets formats: PCAP or BAG with
-    lidar/imu packets"""
+    lidar/imu packets.
+    
+    NOTE: --start-scan/--end-scan works as expected for poses files that have
+    all poses starting from the beginning of the data file, if chunk is started
+    and saved not from the beginning, make sure to use --nc-gt-poses option,
+    otherwise it has some unexpected quirks (sorry I don't have time to
+    fix/restructure it now :()
+    """
     meta = resolve_metadata(file, meta)
     if not meta:
         raise click.ClickException(
@@ -71,24 +78,30 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
     packet_source = read_packet_source(file, meta=info)
     scans_source = client.Scans(packet_source)
 
-    # TODO: remove double read of poses files :( )
+    # TODO: remove double read of poses files, jugling around some API
+    # limitations
     if kitti_poses:
         poses = pu.load_kitti_poses(kitti_poses)
+        scans_num = len(poses)
+        start_scan = start_scan if start_scan < scans_num else 0
+        end_scan = (end_scan if end_scan is not None and end_scan < scans_num
+                    and end_scan >= start_scan else scans_num - 1)
         scans = pu.pose_scans_from_kitti(scans_source, kitti_poses)
     elif nc_gt_poses:
         gts_poses = read_newer_college_gt(nc_gt_poses)
-        poses = np.array([p[1] for p in gts_poses])
-        scans = pose_scans_from_nc_gt(scans_source, nc_gt_poses)
+        scans_num = len(gts_poses)
+        start_scan = start_scan if start_scan < scans_num else 0
+        end_scan = (end_scan if end_scan is not None and end_scan < scans_num
+                    and end_scan >= start_scan else scans_num - 1)
+        # Move all poses to the origin (i.e. --start-scan wise) (easier to
+        # compare various GTs)
+        pose0_inv = np.linalg.inv(gts_poses[start_scan][1])
+        gts_poses = [(t, pose0_inv @ p) for t, p in gts_poses]
+        scans = pose_scans_from_nc_gt(scans_source, nc_gt_poses=gts_poses)
     else:
         raise click.ClickException(
             "Required one of --kitti-poses or --nc-gt-poses, but none was set."
         )
-
-    scans_num = len(poses)
-
-    start_scan = start_scan if start_scan < scans_num else 0
-    end_scan = (end_scan if end_scan is not None and end_scan < scans_num
-                and end_scan >= start_scan else scans_num - 1)
 
     MAP_MAX_POINTS_NUM = 1500000
     # estimate accum map ratio for the densest map
@@ -140,19 +153,13 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
 
     point_viz.push_key_handler(handle_keys)
 
+    # TODO: min_max/res_poses logic are sketchy and smells here, needs a
+    # refactoring. (some weirdness come from using kitti vs nc gt formats
+    # with/wo start/end scan params)
     # min and max point in the cloud to calculate dolly
     min_max = np.zeros((3, 2))
-
-    # prepare a pruned trajectory for camera
-    traj_poses = pu.make_kiss_traj_poses(poses)
-    pruned_traj_poses = prune_trajectory(traj_poses,
-                                         start_idx=start_scan,
-                                         end_idx=end_scan)
-    coursing_traj_eval = pu.TrajectoryEvaluator(pruned_traj_poses,
-                                                time_bounds=1.0)
-
-    # the pose of the start_scan
-    start_target = coursing_traj_eval._poses[0][1]
+    # used for camera coursing pruned trajectory
+    res_poses = []
 
     def make_osd_str() -> str:
         pause_str = "" if not pause else " (PAUSED)"
@@ -165,19 +172,24 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
         return osd_str
 
     def create_state(flying_state: FlyingState) -> FState:
+        nonlocal min_max, res_poses
         if flying_state == FlyingState.BUILDING:
             return BuildingState(scans,
                                  scans_accum,
                                  start_scan=start_scan,
                                  end_scan=end_scan,
                                  min_max=min_max,
+                                 poses=res_poses,
                                  next_state=FlyingState.TO_THE_BEGINNING)
         elif flying_state == FlyingState.TO_THE_BEGINNING:
             return CameraTransitionState(name="TO_THE_BEGINNING",
-                                         target=start_target,
+                                         target=res_poses[0][1],
                                          velocity=0.15,
                                          next_state=FlyingState.COURSING)
         elif flying_state == FlyingState.COURSING:
+            pruned_traj_poses = prune_trajectory(res_poses)
+            coursing_traj_eval = pu.TrajectoryEvaluator(pruned_traj_poses,
+                                                        time_bounds=1.0)
             return CoursingState(coursing_traj_eval,
                                  velocity=5.0,
                                  next_state=FlyingState.TO_THE_APEX)

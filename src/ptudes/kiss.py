@@ -49,6 +49,7 @@ class KissICPWrapper:
 
         self._err_dt = []
         self._err_drot = []
+        self._sigmas = []
 
     def register_frame(self,
                        scan: LidarScan,
@@ -120,6 +121,7 @@ class KissICPWrapper:
         
         self._err_dt.append(dt)
         self._err_drot.append(drot)
+        self._sigmas.append(sigma)
 
         # print(f"dt = {dt:.05f}, drot = {drot:.05f}")
 

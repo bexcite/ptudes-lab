@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional, Iterable
+from typing import Optional, Iterable, List, Tuple
 from enum import Enum
 from abc import ABC, abstractmethod
 
@@ -9,6 +9,7 @@ from ouster.viz import (PointViz, Label, ScansAccumulator)
 import ouster.sdk.pose_util as pu
 from ptudes.utils import estimate_apex_dolly
 
+PoseH = np.ndarray
 
 def update_min_max(cmm: np.array, new_point: np.array):
     cmm[:, 0] = np.minimum(cmm[:, 0], new_point)
@@ -43,6 +44,7 @@ class BuildingState(FState):
                  start_scan: Optional[int] = None,
                  end_scan: Optional[int] = None,
                  min_max: Optional[np.ndarray] = None,
+                 poses: Optional[List[Tuple[float, PoseH]]] = None,
                  next_state: Optional[FlyingState] = None) -> None:
         super().__init__("BUILDING")
 
@@ -60,6 +62,10 @@ class BuildingState(FState):
         else:
             assert min_max.shape == (3, 2)
             self._min_max = min_max
+
+        # return the processed scans ts
+        self._poses = poses
+        assert len(self._poses) == 0, "poses list should be empty on init"
 
         self._next_state = next_state
 
@@ -80,6 +86,11 @@ class BuildingState(FState):
             # draw map points
             self._scans_accum.update(scan)
             self._scans_accum.draw(update=False)
+
+            if self._poses is not None:
+                col_idx = client.last_valid_column(scan)
+                self._poses.append(
+                    (scan.timestamp[col_idx], scan.pose[col_idx]))
 
             # move camera along with dolly
             scan_pose = client.first_valid_column_pose(scan).copy()
@@ -130,7 +141,7 @@ class CameraTransitionState(FState):
     """Transition camera to the target and/or pitch/dolly/yaw"""
     def __init__(self,
                  name: str = "",
-                 target: Optional[np.ndarray] = None,
+                 target: Optional[PoseH] = None,
                  pitch: Optional[float] = -70,
                  dolly: Optional[float] = -70,
                  yaw: Optional[float] = 120,

@@ -123,6 +123,9 @@ def blk(m: np.ndarray,
 
 def calc_ate(navs_poses, gt_poses) -> Tuple[float, float]:
     """Calculate Avg Traj Error (ATE)
+
+    Time aligned, but not trasform. i.e. first poses of two trajectories
+    will be aligned to the the same value before calculating ATE.
     
     Args:
       navs_poses: list of poses from the filter
@@ -131,9 +134,15 @@ def calc_ate(navs_poses, gt_poses) -> Tuple[float, float]:
     Return:
       tuple with ATE_rotation (deg) and ATE_translation (m)
     """
+    assert len(navs_poses) == len(gt_poses)
+    assert len(navs_poses)
+
+    pose0_inv = navs_poses[0] @ np.linalg.inv(gt_poses[0])
+
     trans_d = []
     rot_d = []
     for nav_pose, gt_pose in zip(navs_poses, gt_poses):
+        gt_pose = pose0_inv @ gt_pose
         trans_d.append(np.linalg.norm(gt_pose[:3, 3] - nav_pose[:3, 3]))
         rd = Rotation.from_matrix(
             np.transpose(nav_pose[:3, :3]) @ gt_pose[:3, :3]).as_rotvec()
