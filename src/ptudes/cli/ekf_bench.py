@@ -1,6 +1,7 @@
 """Error-state Extended Kalman Filter experiments"""
-from typing import Iterator
+from typing import Iterator, List
 from datetime import datetime
+import os
 import time
 import click
 from typing import Optional
@@ -8,6 +9,7 @@ from typing import Optional
 import ouster.client as client
 from ouster.client import ChanField
 from ouster.sdk.util import resolve_metadata
+import ouster.sdk.pose_util as pu
 
 from ptudes.utils import (read_metadata_json, read_packet_source,
                           read_newer_college_gt, save_poses_kitti_format,
@@ -16,6 +18,7 @@ from ptudes.utils import (read_metadata_json, read_packet_source,
 
 import numpy as np
 import numpy.random as npr
+from scipy.spatial.transform import Rotation
 from ptudes.ins.data import (IMU, GRAV, calc_ate, ekf_traj_ate,
                              _collect_navs_from_gt, StreamStatsTracker)
 from ptudes.ins.es_ekf import ESEKF
@@ -33,7 +36,7 @@ UP = np.array([0, 0, 1])
 def ptudes_ekf_bench() -> None:
     """ES EKF benchmarks and experiments.
 
-    Various experiments with Error-state kalman filters and IMU mechanizations.
+    Experiments with Error-state kalman filters and IMU mechanizations.
     """
     pass
 
@@ -109,7 +112,8 @@ def ptudes_ekf_sim(duration: float,
                    plot: Optional[str] = None) -> None:
     """EKF with simulated IMU measurements.
 
-    Ground truth pose is an integrated noise/bias free measurements.
+    Noise/bias free integrated measurements used as ground truth for pose
+    corrections (ekf updates).
     """
 
     print("Using sim IMUs with params:")
@@ -334,9 +338,10 @@ def ptudes_ekf_nc(file: str,
               is_flag=True,
               help="Use EKF IMU pose prediction for KissICP register frame, "
               "i.e. lously coupled Lidar Inertial Odometry")
-@click.option('--ekf-pose-to-map',
+@click.option('--use-gt-guess',
               is_flag=True,
-              help="Use EKF pose for KissICP local map update")
+              help="Use GT pose as a guess for KissICP (used solely for "
+              "sanity testing)")
 @click.option("-g",
               "--gt-file",
               required=False,
@@ -374,7 +379,7 @@ def ptudes_ekf_ouster(file: str,
                       end_scan: Optional[int] = None,
                       plot: Optional[str] = None,
                       use_imu_prediction: bool = False,
-                      ekf_pose_to_map: bool = False,
+                      use_gt_guess: bool = False,
                       gt_file: Optional[str] = None,
                       beams: int = 0,
                       save_kitti_poses: Optional[str] = None,
@@ -388,19 +393,39 @@ def ptudes_ekf_ouster(file: str,
     state is not changed in any way (i.e. map, prediction model,
     deskew, etc not affected)
 
-    Ground truth (--gt-file) in Newer College dataset is used only
-    for graphs (--plot graphs) to compare the resulting trajectory.
+    Ground truth (--gt-file) in Newer College dataset is used for graphs (--plot
+    graphs) to compare the resulting trajectory or for sanity testing EKF with
+    --use-gt-guess when GT used for pose corrections.
 
-    Use save trajectory in kitti format (--save-kitt-poses) to visualize
-    3d point clouds of the map using `ptudes flyby` or other tools.
+    Use save trajectory in kitti format (--save-kitt-poses) or NC GT format
+    (--save-nc-gt-poses) to visualize 3d point clouds of the map using `ptudes
+    flyby` or other tools.
+
+    Compare trajectories of different runs using the (--save-nc-gt-poses) and
+    `ptudes ekf-bench cmp` command.
+
+    Use --beams NUM to reduce the number of beams of lidar scan, which is useful
+    to simulate low res sensors.
     """
+
+    if not gt_file and use_gt_guess:
+        print("ERROR: --use-gt-guess requires the GT poses (--gt-file)")
+        exit(1)
 
     meta = resolve_metadata(file, meta)
     if not meta:
         raise click.ClickException(
             "File not found, please specify a metadata file with `-m`")
-    click.echo(f"Reading metadata from: {meta}")
     info = read_metadata_json(meta)
+
+    display_header = f"data path: {file}\n"
+    display_header += f"metadata path: {meta}\n\n"
+    display_header += f"scans range: {start_scan} - {end_scan}\n"
+    display_header += f"kiss min/max: {kiss_min_range} - {kiss_max_range}\n"
+    display_header += f"use-imu-prediction: {use_imu_prediction}, use-gt-guess: {use_gt_guess}\n"
+    display_header += f"beams: {beams or info.format.pixels_per_column}\n"
+    display_header += f"sensor: {info.prod_line}, {info.mode}\n"
+    print(display_header)
 
     packet_source = read_packet_source(file, meta=info)
 
@@ -424,8 +449,8 @@ def ptudes_ekf_ouster(file: str,
 
     ekf = ESEKF()
 
-    gt_t = []
-    gt_poses = []
+    res_t = []
+    kiss_poses = []
 
     res_poses = []
 
@@ -444,6 +469,15 @@ def ptudes_ekf_ouster(file: str,
 
     init_stats_ts = 3
     init_stats_flag = True
+
+    gts = []
+    gt_traj = None
+    gt_traj_first = False
+    gt_traj0 = np.eye(4)
+    if gt_file:
+        gts = read_newer_college_gt(gt_file)
+        if use_gt_guess:
+            gt_traj = pu.TrajectoryEvaluator(gts, time_bounds=1.0)
 
     for scan_idx, d in data_source.withScanIdx(start_scan=start_scan,
                                                end_scan=end_scan):
@@ -473,9 +507,18 @@ def ptudes_ekf_ouster(file: str,
 
             t1 = time.monotonic()
 
+            ts = client.last_valid_column_ts(ls) * 1e-09
+
             if use_imu_prediction:
                 # EKF IMU based prediction for KissICP
                 pose_guess = ekf._nav_curr.pose_mat()
+            elif use_gt_guess and gt_traj is not None:
+                # GT pose prediction for KissICP (for sanity tests)
+                gt_guess = gt_traj.pose_at(ts)
+                if not gt_traj_first:
+                    gt_traj0 = np.linalg.inv(gt_guess)
+                    gt_traj_first = True
+                pose_guess = gt_traj0 @ gt_guess
             else:
                 # Standard constant velocity/linear KissICP prediction
                 prediction = kiss_icp._kiss.get_prediction_model()
@@ -483,97 +526,19 @@ def ptudes_ekf_ouster(file: str,
                              if kiss_icp._kiss.poses else np.eye(4))
                 pose_guess = last_pose @ prediction
 
-            # # 2.0 kiss_icp.register_frame()
-            # sel_flag = ls.field(ChanField.RANGE) != 0
-            # xyz = kiss_icp._xyz_lut(ls)[sel_flag]
-            # frame = xyz
-            # timestamps = kiss_icp._timestamps[sel_flag]
-
             t1 = time.monotonic()
-
-            if not ekf_pose_to_map:
-
-                # Option1: No EKF result integration to map
-                kiss_icp.register_frame(ls, initial_guess=pose_guess)
-                ekf.processPose(kiss_icp.pose)
-                gt_poses.append(kiss_icp.pose)
-
-            else:
-                # Option2: Integrate EKF result to the kiss local map
-
-                # 2.0 kiss_icp.register_frame()
-                sel_flag = ls.field(ChanField.RANGE) != 0
-                xyz = kiss_icp._xyz_lut(ls)[sel_flag]
-                frame = xyz
-                timestamps = kiss_icp._timestamps[sel_flag]
-
-                # Apply motion compensation
-
-                # ## 2.1 kiss_icp._kiss_register_frame()
-                initial_guess = pose_guess
-                kself = kiss_icp._kiss
-                frame = kself.compensator.deskew_scan(frame, kiss_icp.poses, timestamps)
-
-                # Preprocess the input cloud (not used here)
-                frame = kself.preprocess(frame)
-
-                # Voxelize
-                source, frame_downsample = kself.voxelize(frame)
-
-                # Get motion prediction and adaptive_threshold
-                sigma = kself.get_adaptive_threshold()
-
-                # Compute initial_guess for ICP
-                if initial_guess is None:
-                    prediction = kself.get_prediction_model()
-                    last_pose = kself.poses[-1] if kself.poses else np.eye(4)
-                    initial_guess = last_pose @ prediction
-
-                # Run ICP
-                from kiss_icp.registration import register_frame as kregister_frame
-                kiss_icp_pose = kregister_frame(
-                    points=source,
-                    voxel_map=kself.local_map,
-                    initial_guess=initial_guess,
-                    max_correspondance_distance=3 * sigma,
-                    kernel=sigma / 3,
-                )
-
-                ## 2.2 EKF Update
-                ekf.processPose(kiss_icp_pose)
-
-                ekf_pose = ekf._nav_curr.pose_mat()
-
-                kself.adaptive_threshold.update_model_deviation(
-                    np.linalg.inv(initial_guess) @ ekf_pose)
-                kself.local_map.update(frame_downsample, ekf_pose)
-                kself.poses.append(ekf_pose)
-
-                ts = client.last_valid_column_ts(ls) * 1e-09
-                kiss_icp._poses_ts.append(ts)
-
-                gt_poses.append(kiss_icp_pose)
-            ############################
-
-            # ekf._navs[-1].kiss_map = kiss_icp.local_map_points
-            # ekf._navs[-1].xyz = xyz
-
+            kiss_icp.register_frame(ls, initial_guess=pose_guess)
             t_kiss += time.monotonic() - t1
 
             t1 = time.monotonic()
-            # ekf.processPose(kiss_icp.pose)
+            ekf.processPose(kiss_icp.pose)
             t_corr += time.monotonic() - t1
             t_corr_cnt += 1
 
-            # print(f"\n\nimu iter[{scan_idx}] = ", t_imu / t_imu_cnt)
-            # print(f"corr iter[{scan_idx}] = ", t_corr / t_corr_cnt)
-            # print(f"kiss iter[{scan_idx}] = ", t_kiss / t_corr_cnt)
-            # print(f"track iter[{scan_idx}] = ", t_track / t_corr_cnt)
-
+            # collect metrics
+            kiss_poses.append(kiss_icp.pose)
             res_poses.append(ekf._nav_curr.pose_mat())
-
-            # gt_poses.append(kiss_icp.pose)
-            gt_t.append(ekf._navs_t[-1])
+            res_t.append(ekf._navs_t[-1])
 
         if not init_stats_flag and stats.dt > init_stats_ts:
             print(stats)
@@ -584,15 +549,10 @@ def ptudes_ekf_ouster(file: str,
     if not ekf._navs:
         return
 
-
     # log header for storing resulting poses
+    header = display_header
+    header += f"(scans/updates num: {len(res_poses)})\n"
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    header = f"data path: {file}\n"
-    header += f"metadata path: {meta}\n\n"
-    header += f"scans range: {start_scan} - {end_scan} (scans/updates num: {len(gt_t)})\n"
-    header += f"kiss min/max: {kiss_min_range} - {kiss_max_range}\n"
-    header += f"use-imu-prediction: {use_imu_prediction}, ekf-pose-to-map: {ekf_pose_to_map}\n"
-    header += f"sensor: {info.prod_line}, {info.mode}\n"
     header += f"time: {now}"
 
     if save_kitti_poses:
@@ -601,39 +561,35 @@ def ptudes_ekf_ouster(file: str,
 
     if save_nc_gt_poses:
         save_poses_nc_gt_format(save_nc_gt_poses,
-                                t=gt_t,
+                                t=res_t,
                                 poses=res_poses,
                                 header=header)
         print(f"NC GT poses saved to: {save_nc_gt_poses}")
 
-
-    import matplotlib.pyplot as plt
-
-    # rel_t = np.array(kiss_icp._poses_ts) - kiss_icp._poses_ts[0]
-    # plt.plot(rel_t, kiss_icp._err_dt)
-    # plt.plot(rel_t, kiss_icp._err_drot)
-    # plt.show()
-
+    print("\nTimings:")
+    print(f"  ESEKF imu process:      {t_imu / t_imu_cnt:.05f} s per step")
+    print(f"  ESEKF update:           {t_corr / t_corr_cnt:.05f} s per update")
+    print(f"  KissICP register frame: {t_kiss / t_corr_cnt:.05f} s per frame")
+    print(f"  Stats tracking:         {t_track / t_corr_cnt:.05f} s per frame")
 
     if plot == "graphs":
         gt2 = None
-        if gt_file:
-            gts = read_newer_college_gt(gt_file)
-
+        if gts:
             # aligning/filtering to have only close by ts gt and calc poses
-            gts, gt_t_matched = filter_nc_gt_by_close_ts(gts, gt_t)
-            gt_poses_matched = []
+            gts, res_t_matched = filter_nc_gt_by_close_ts(gts, res_t)
+            kiss_poses_matched = []
             res_poses_matched = []
             idx = 0
-            for t_m in gt_t_matched:
-                while gt_t[idx] != t_m:
+            for t_m in res_t_matched:
+                while res_t[idx] != t_m:
                     idx += 1
-                gt_poses_matched.append(gt_poses[idx])
+                kiss_poses_matched.append(kiss_poses[idx])
                 res_poses_matched.append(res_poses[idx])
                 idx += 1
 
             if gts:
-                gts_pose0 = np.linalg.inv(gts[0][1])
+                # GT file has poses for the processed timestampss
+                gts_pose0 = res_poses_matched[0] @ np.linalg.inv(gts[0][1])
                 gt2_t = [g[0] for g in gts]
                 gt2_poses = [gts_pose0 @ g[1] for g in gts]
                 gt2 = (gt2_t, gt2_poses)
@@ -641,12 +597,12 @@ def ptudes_ekf_ouster(file: str,
                 num_poses = len(gt2_poses)
 
                 ate_rot, ate_trans = calc_ate(res_poses_matched, gt2_poses)
-                print(f"\nGround truth comparison (with smoothed EKF "
+                print(f"\nGround truth comparison (with ES EKF smoothing "
                       f"{num_poses} poses):")
                 print(f"ATE_rot:   {ate_rot:.04f} deg")
                 print(f"ATE trans: {ate_trans:.04f} m")
 
-                ate_rot, ate_trans = calc_ate(gt_poses_matched, gt2_poses)
+                ate_rot, ate_trans = calc_ate(kiss_poses_matched, gt2_poses)
                 print("\nGround truth comparison (no-EKF, only KissICP "
                       f"{num_poses} poses):")
                 print(f"ATE_rot:   {ate_rot:.04f} deg")
@@ -654,19 +610,29 @@ def ptudes_ekf_ouster(file: str,
 
                 # graph only matched gt poses of kiss icp too (if gt-file
                 # is present)
-                gt_t = gt_t_matched
-                gt_poses = gt_poses_matched
+                res_t = res_t_matched
+                kiss_poses = kiss_poses_matched
 
-                # dts = [t2-t1 for t1, t2 in zip(gt_t_matched, gt2_t)]
-                # print("dts = ", dts)
         ekf_graphs(ekf,
-                   xy_plot=True,
-                   gt=(gt_t, gt_poses),
+                   gt=(res_t, kiss_poses),
                    gt2=gt2,
+                   xy_plot=True,
                    labels=[
                        "ES EKF KissICP smoothed poses", "KissICP only poses",
                        "GT poses"
                    ])
+
+        # TODO: extract me ... ?
+        import matplotlib.pyplot as plt
+        rel_t = np.array(kiss_icp._poses_ts) - kiss_icp._poses_ts[0]
+        plt.plot(rel_t, kiss_icp._err_dt, label="KissICP: trans error (m)")
+        plt.plot(rel_t, kiss_icp._err_drot, label="KissICP: rotation error (rad)")
+        plt.plot(rel_t, kiss_icp._sigmas, label="KissICP: adaptive threshold sigma")
+        plt.grid(True)
+        plt.xlabel("t (s)")
+        plt.legend(loc="upper right")
+        plt.show()
+
     elif plot == "point_viz":
         ekf_viz(ekf)
     elif not plot:
@@ -677,7 +643,10 @@ def ptudes_ekf_ouster(file: str,
 
 @click.command(name="cmp")
 @click.argument("gt_file", required=True, type=click.Path(exists=True))
-@click.argument("gt_file_cmp", required=True, type=click.Path(exists=True))
+@click.argument("gt_file_cmp",
+                required=True,
+                type=click.Path(exists=True),
+                nargs=-1)
 @click.option("-p",
               "--plot",
               required=False,
@@ -686,44 +655,75 @@ def ptudes_ekf_ouster(file: str,
 @click.option('--use-gt-frame',
               is_flag=True,
               help="Use GT frame (i.e. align cmp poses to gt)")
+@click.option('--xy-plot',
+              is_flag=True,
+              help="Draw X and Y dimenstions on XY plane, instead of separate")
 def ptudes_ekf_cmp(gt_file: str,
-                   gt_file_cmp: str,
+                   gt_file_cmp: List[str],
                    plot: Optional[str] = None,
+                   xy_plot: bool = False,
                    use_gt_frame: bool = False) -> None:
     """Compare trajectories in Newer College Dataset Formats"""
 
     gts_all = read_newer_college_gt(gt_file)
-    gts_cmp = read_newer_college_gt(gt_file_cmp)
 
-    gts, gts_cmp = filter_nc_gt_by_cmp(gts_all, gts_cmp)
+    gts_cmp_all = [read_newer_college_gt(f) for f in gt_file_cmp]
 
-    # dts = [t2-t1 for (t1, _), (t2, _) in zip(gts, gts_cmp)]
-    # print("dts = ", dts)
+    gts = []
+    gts_cmp = []
 
-    if not use_gt_frame:
-        # move gt poses to the cmp poses (i.e. align)
-        gts_pose0 = gts_cmp[0][1] @ np.linalg.inv(gts[0][1])
-        gts_poses = [gts_pose0 @ p for (_, p) in gts]
-        gts_cmp_poses = [p for (_, p) in gts_cmp]
-        gts = [(gts[i][0], gts_poses[i]) for i in range(len(gts))]
-        gts_all = [(t, gts_pose0 @ p) for t, p in gts_all]
-    else:
-        # move cmp poses to the gt poses (i.e. align)
-        gts_cmp_pose0 = gts[0][1] @ np.linalg.inv(gts_cmp[0][1])
-        gts_poses = [p for (_, p) in gts]
-        gts_cmp_poses = [gts_cmp_pose0 @ p for (_, p) in gts_cmp]
-        gts_cmp = [(gts_cmp[i][0], gts_cmp_poses[i]) for i in range(len(gts_cmp))]
+    for gc in gts_cmp_all:
+        gts_el, gts_cmp_el = filter_nc_gt_by_cmp(gts_all, gc)
+        gts.append(gts_el)
+        gts_cmp.append(gts_cmp_el)
 
-    ate_rot, ate_trans = calc_ate(gts_poses, gts_cmp_poses)
-    print(f"\nTraj poses comparisons ({len(gts_poses)} poses):")
-    print(f"ATE_rot:   {ate_rot:.04f} deg")
-    print(f"ATE trans: {ate_trans:.04f} m")
+    fname = lambda f: os.path.splitext(os.path.basename(f))[0]
+
+    for idx, cmp_file in enumerate(gt_file_cmp):
+        gts_poses = [p for (_, p) in gts[idx]]
+        gts_cmp_poses = [p for (_, p) in gts_cmp[idx]]
+        ate_rot, ate_trans = calc_ate(gts_poses, gts_cmp_poses)
+        print(f"\nTraj poses comparisons GT v. {fname(cmp_file)} "
+              f"({len(gts_poses)} poses):")
+        print(f"ATE_rot:   {ate_rot:.04f} deg")
+        print(f"ATE trans: {ate_trans:.04f} m")
 
     if plot in ["graphs", "graphs_full"]:
-        gt_poses_graphs(gts_all if plot == "graphs_full" else gts,
-                        gts_cmp,
-                        xy_plot=False,
-                        labels=["GT Poses", "Compare poses"])
+
+        if len(gt_file_cmp) > 1:
+            use_gt_frame = True
+            print("\nNOTE: Enforcing --use-gt-frame because the number of "
+                  "trajectories to compare is more than one")
+
+        # combined GT for all trajectories to compare timestamps
+        cmp_min_ts = min([gc[0][0] for gc in gts_cmp])
+        cmp_max_ts = max([gc[-1][0] for gc in gts_cmp])
+        gts_comb_cmp = [
+            gc for gc in gts_all if gc[0] >= cmp_min_ts and gc[0] <= cmp_max_ts
+        ]
+
+        if not use_gt_frame:
+            # only one gt_file_cmp is present
+            gts_pose0 = gts_cmp[0][0][1] @ np.linalg.inv(gts_comb_cmp[0][1])
+            gts_comb_cmp = [(t, gts_pose0 @ p) for t, p in gts_comb_cmp]
+            gts_all = [(t, gts_pose0 @ p) for t, p in gts_all]
+        else:
+            # move cmp poses to the gt poses (i.e. align)
+            for idx in range(len(gts_cmp)):
+                gts_cmp_pose0 = gts[idx][0][1] @ np.linalg.inv(
+                    gts_cmp[idx][0][1])
+                gts_cmp[idx] = [(t, gts_cmp_pose0 @ p)
+                                for t, p in gts_cmp[idx]]
+
+        cmp_labels = [
+            f"Cmp poses {i + 1}: {fname(f)}"
+            for i, f in enumerate(gt_file_cmp)
+        ]
+
+        gt_poses_graphs(
+            [gts_all if plot == "graphs_full" else gts_comb_cmp, *gts_cmp],
+            xy_plot=xy_plot,
+            labels=[f"GT Poses: {fname(gt_file)}", *cmp_labels])
     elif plot == "point_viz":
         print("PointViz view of the trajectories to compare NOT YET "
               "IMPLEMENTED")

@@ -12,20 +12,23 @@ from ptudes.ins.data import NavState, blk
 from ptudes.viz_utils import (RED_COLOR, BLUE_COLOR, YELLOW_COLOR, GREY_COLOR,
                               GREY1_COLOR, WHITE_COLOR)
 
+
 def draw_poses_sets(axs,
-                    gts0,
-                    gts1: Optional[Tuple[List, List]] = None,
-                    gts2: Optional[Tuple[List, List]] = None,
-                    min_ts: float = 0,
-                    labels: List[str] = []):
+                    trajs: List[List[Tuple[float, pu.PoseH]]] = [],
+                    min_ts: Optional[float] = None,
+                    labels: List[str] = [],
+                    colors: List[str] = ["g", "b", "r"]):
     assert len(axs) in [2, 3]
 
-    colors = ["g", "b", "r"]
-    for idx, gts in enumerate([gts0, gts1, gts2]):
+    if min_ts is None:
+        min_ts = min([t[0][0] for t in trajs if len(t)])
+
+    # colors = ["g", "b", "r"]
+    for idx, gts in enumerate(trajs):
         if not gts:
             continue
         label = labels[idx] if idx < len(labels) else ""
-        color = colors[idx]
+        color = colors[idx] if idx < len(colors) else ""
 
         gts_t = np.array([t for (t, _) in gts]) - min_ts
         gts_p = np.array([p for (_, p) in gts])
@@ -47,11 +50,13 @@ def draw_poses_sets(axs,
         handles, labels = a.get_legend_handles_labels()
         # Check artists existence to avoid plt warnings
         if handles:
-            a.legend(handles, labels, loc="upper right", frameon=False)
+            a.legend(handles, labels, loc="upper right", frameon=True)
         a.grid(True)
 
 
-def gt_poses_graphs(gts0, gts1, xy_plot: bool = False, labels: List[str] = []):
+def gt_poses_graphs(trajs: List[List[Tuple[float, pu.PoseH]]] = [],
+                    xy_plot: bool = False,
+                    labels: List[str] = []):
     fig = plt.figure()
     axs = []
     if xy_plot:
@@ -60,9 +65,7 @@ def gt_poses_graphs(gts0, gts1, xy_plot: bool = False, labels: List[str] = []):
     else:
         axs.extend([fig.add_subplot(3, 1, i + 1) for i in range(3)])
 
-    min_ts = min(gts0[0][0], gts1[0][0])
-
-    draw_poses_sets(axs, gts0, gts1, min_ts=min_ts, labels=labels)
+    draw_poses_sets(axs, trajs=trajs, labels=labels, colors=["g"])
 
     plt.show()
 
@@ -107,7 +110,7 @@ def ekf_graphs(ekf,
     i = 0
     ax[i].plot(t, acc[:, 0], label="data (acc/gyr)")
     ax[i].plot(nav_t, ba[:, 0], label="bias (acc/gyr)")
-    ax[i].legend(loc="upper right", frameon=False)
+    ax[i].legend(loc="upper right", frameon=True)
     ax[i].set_ylabel('acc_X')
     ax[i + 1].plot(t, acc[:, 1])
     ax[i + 1].plot(nav_t, ba[:, 1])
@@ -153,18 +156,25 @@ def ekf_graphs(ekf,
     if gt2 is not None:
         gts2 = [(t, p) for t, p in zip(gt2[0], gt2[1])]
 
-    draw_poses_sets(axs,
-                    gts0=navs,
-                    gts1=gts1,
-                    gts2=gts2,
-                    min_ts=min_ts,
-                    labels=labels)
+    # making trajs + labels in correct order so we have desired colors
+    flabels = [
+        main_label, labels[1] if len(labels) > 1 else "",
+        labels[2] if len(labels) > 2 else ""
+    ]
+    if gts2 is not None:
+        trajs = [gts2, navs, gts1]
+        labels = [flabels[2], flabels[0], flabels[1]]
+    else:
+        trajs = [gts1, navs]
+        labels = [flabels[1], flabels[0]]
+
+    draw_poses_sets(axs, trajs=trajs, min_ts=min_ts, labels=labels)
 
     for a in ax:
         handles, labels = a.get_legend_handles_labels()
         # Check artists existence to avoid plt warnings
         if handles:
-            a.legend(handles, labels, loc="upper right", frameon=False)
+            a.legend(handles, labels, loc="upper right", frameon=True)
         a.grid(True)
 
     # Draw navs/gt poses knots on t axis
