@@ -156,13 +156,14 @@ list of keyboard shortcuts can be found `here`_
 Ouster Lidar/IMUs + KissICP + trajectory smoothing (Error-State EKF)
 ---------------------------------------------------------------------
 
-Since Ouster Lidar raw ``.pcap/.bag`` recording almost always comes with
-**imu_packets** it may be used to get better trajectories on some tricky cases,
-like tunnels with less features, fast movements or lower resolution sensors.
-(though it's not universally better and need to be used with caution).
+Ouster Lidar raw ``.pcap/.bag`` recordings almost always come with
+**imu_packets** inside which may be used to get better trajectories estimation
+on some tricky cases, like tunnels with less features, fast platform movements
+or lower resolution sensors. (though it's not universally better and need to be
+used with caution).
 
-``ptudes ekf-bench`` has various experiments with ES EKF implementation that
-uses the Ouster **imu_packets**.
+``ptudes ekf-bench`` CLI has various tools with ES EKF implementation that uses
+the Ouster **imu_packets** together with KissICP.
 
 ES EKF as a smoothing filter for KissICP trajectories
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -186,7 +187,7 @@ With graphs showing the smoothing in action:
 .. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/ekf-tests/docs/images/ekf_smoothing_ouster_easy.png
 
 and KissICP adaptive threshold estimates per scan with a corresponding pose
-innovation from ICP:
+innovation from ICP update:
 
 .. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/ekf-tests/docs/images/ekf_smoothing_sigma.png
 
@@ -202,4 +203,3 @@ And then use ``ptudes ekf-bench cmp`` command to compare various trajectories::
 
 .. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/ekf-tests/docs/images/ekf_smoothing_imu_pred_compare.png
 
-more details about used ES EKF filter to come ....
