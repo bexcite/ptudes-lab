@@ -381,6 +381,10 @@ def pose_scans_from_nc_gt(
             except ValueError as e:
                 skipped_scans += 1
                 continue
+            except AssertionError as e:
+                print("WARNING (BROKEN SCANS?): ", str(e))
+                skipped_scans += 1
+                continue
 
             yield scan
 
