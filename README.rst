@@ -184,12 +184,12 @@ NCD looks like this::
 
 With graphs showing the smoothing in action:
 
-.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/ekf-tests/docs/images/ekf_smoothing_ouster_easy.png
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/ekf_smoothing_ouster_easy.png
 
 and KissICP adaptive threshold estimates per scan with a corresponding pose
 innovation from ICP update:
 
-.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/ekf-tests/docs/images/ekf_smoothing_sigma.png
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/ekf_smoothing_sigma.png
 
 To use ES EKF prediction as a KissICP initial guess, you can use
 ``--use-imu-prediction`` option with ``ptudes ekf-bench ouster``.
@@ -201,5 +201,5 @@ And then use ``ptudes ekf-bench cmp`` command to compare various trajectories::
       quad-easy-imu-pred.csv \
       -p graphs --xy-plot
 
-.. figure:: https://github.com/bexcite/ptudes-lab/raw/pb/ekf-tests/docs/images/ekf_smoothing_imu_pred_compare.png
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/ekf_smoothing_imu_pred_compare.png
 
