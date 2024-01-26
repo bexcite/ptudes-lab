@@ -63,12 +63,11 @@ Or you can record it from the sensor if you have one, using ``ouster-sdk/cli``::
 
     ouster-cli source <MY_SENSOR_IP> record
 
-2. Get the lidar scans poses in kitti format
-`````````````````````````````````````````````
+2. Get the lidar scans poses in kitti format or NC GT format
+`````````````````````````````````````````````````````````````
 
-All my experiments based on `KISS-ICP`_ pose outputs in KITTI format. To get
-the scan poses you can run ``kiss-icp`` pipeline on the previously obtained
-Ouster ``.pcap`` data using::
+You `KISS-ICP`_ pose outputs in KITTI format directly running the official
+``kiss_icp_pipeline`` on the previously obtained Ouster ``.pcap`` data using::
 
     kiss_icp_pipeline --deskew ./OS-0-128_v3.0.1_1024x10.pcap
 
@@ -78,6 +77,12 @@ the result of some post-processing step (smoothing, loop closure, fusion with
 other sensors etc) the only requirement is that the number of poses should be
 the same as the number of scans in the ``.pcap/.bag`` file.
 
+Alternatively you can run ``ptudes ekf-bench ouster`` command with
+``--save-nc-gt-poses poses.csv`` to get the trajectory in Newer College Dataset
+Ground Truth format (*NC GT*), which has a much better utility value since it
+contains timestamp per pose and can be used to calculate ATE between
+trajectories.
+
 .. _official sensor docs: https://static.ouster.dev/sensor-docs/#sample-data
 .. _KISS-ICP: https://github.com/PRBonn/kiss-icp
 
@@ -85,15 +90,15 @@ How to run:
 ~~~~~~~~~~~
 
 Once you have Ouster sensor ``.pcap/.bag`` data and poses per every scan in
-KITTI format you can run ``ptudes flyby`` command as::
+KITTI format (or NC GT format) you can run ``ptudes flyby`` command as::
 
     ptudes flyby ./OS-0-128_v3.0.1_1024x10.pcap --kitti-poses ./OS-0-128_v3.0.1_poses_kitti.txt
 
-or for example using ``.bag`` from `Newer College`_ dataset::
+or for example using ``.bag`` from `Newer College`_ dataset and the NC GT ground truth data::
 
     ptudes flyby ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
         --meta ./newer-college/2021-ouster-os0-128-alphasense/beam_intrinsics_os0-128.json \
-        --kitti-poses ./2021-07-01-10-37-38-quad-easy_poses_kitti.txt \
+        --nc-gt-poses ./newer-college/2021-ouster-os0-128-alphasense/collection1/ground_truth/gt-nc-quad-easy.csv \
         --start-scan 20 \
         --end-scan 50
 
@@ -147,4 +152,54 @@ list of keyboard shortcuts can be found `here`_
 .. _PointViz: https://static.ouster.dev/sdk-docs/python/viz/index.html
 .. _here: https://static.ouster.dev/sdk-docs/sample-data.html#id1
 
+
+Ouster Lidar/IMUs + KissICP + trajectory smoothing (Error-State EKF)
+---------------------------------------------------------------------
+
+Ouster Lidar raw ``.pcap/.bag`` recordings almost always come with
+**imu_packets** inside which may be used to get better trajectories estimation
+on some tricky cases, like tunnels with less features, fast platform movements
+or lower resolution sensors. (though it's not universally better and need to be
+used with caution).
+
+``ptudes ekf-bench`` CLI has various tools with ES EKF implementation that uses
+the Ouster **imu_packets** together with KissICP.
+
+ES EKF as a smoothing filter for KissICP trajectories
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``ptudes ekf-bench ouster`` command that can run on Ouster Lidar raw
+recordings in ``.pcap/.bag`` and outputs smoothed KissICP poses that can be
+compared with available ground truth automatically (in Newer College Dataset
+format) by plotting trajectories together and calculating Average Trajectory
+Error (ATE).
+
+For example, result of the run on ``quad-easy.bag`` from the ``collection1`` of
+NCD looks like this::
+
+    ptudes ekf-bench ouster ./newer-college/2021-ouster-os0-128-alphasense/collection1/2021-07-01-10-37-38-quad-easy.bag \
+      --gt-file ./newer-college/2021-ouster-os0-128-alphasense/collection1/ground_truth/gt-nc-quad-easy.csv \
+      --save-nc-gt-poses quad-easy.csv \
+      -p graphs
+
+With graphs showing the smoothing in action:
+
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/ekf_smoothing_ouster_easy.png
+
+and KissICP adaptive threshold estimates per scan with a corresponding pose
+innovation from ICP update:
+
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/ekf_smoothing_sigma.png
+
+To use ES EKF prediction as a KissICP initial guess, you can use
+``--use-imu-prediction`` option with ``ptudes ekf-bench ouster``.
+
+And then use ``ptudes ekf-bench cmp`` command to compare various trajectories::
+
+    ptudes ekf-bench cmp ./newer-college/2021-ouster-os0-128-alphasense/collection1/ground_truth/gt-nc-quad-easy.csv \
+      quad-easy.csv \
+      quad-easy-imu-pred.csv \
+      -p graphs --xy-plot
+
+.. figure:: https://github.com/bexcite/ptudes-lab/raw/main/docs/images/ekf_smoothing_imu_pred_compare.png
 

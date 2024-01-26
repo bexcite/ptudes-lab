@@ -124,8 +124,8 @@ def ptudes_ekf_sim(duration: float,
 
     print("Running EKF ... \n")
 
-    ekf_gt = ESEKF()
-    ekf = ESEKF()
+    ekf_gt = ESEKF(_logging=True)
+    ekf = ESEKF(_logging=True)
 
     initialized = False
     dur_t = duration
@@ -145,7 +145,7 @@ def ptudes_ekf_sim(duration: float,
         ekf.processImu(imu_noisy)
 
         if ts - last_corr_t > corr_t:
-            ekf.processPose(ekf_gt._nav_curr.pose_mat())
+            ekf.processPose(ekf_gt.nav.pose_mat())
             last_corr_t = ts
 
         if ts - start_ts > dur_t:
@@ -156,8 +156,8 @@ def ptudes_ekf_sim(duration: float,
     print(f"processed duration: {ts - start_ts:0.04} s")
     print(f"updates num: {len(ekf._nav_update_idxs)}\n")
 
-    print("NAV GT:\n", ekf_gt._nav_curr)
-    print("NAV:\n", ekf._nav_curr)
+    print("NAV GT:\n", ekf_gt.nav)
+    print("NAV:\n", ekf.nav)
 
     ate_rot, ate_trans = ekf_traj_ate(ekf_gt, ekf)
     print(f"ATE_rot:   {ate_rot:.04f} deg")
@@ -253,10 +253,12 @@ def ptudes_ekf_nc(file: str,
 
     print("Running EKF ... \n")
 
-    ekf = ESEKF(init_grav=init_grav)
+    ekf = ESEKF(init_grav=init_grav, _logging=bool(plot))
 
     gt_t = []
     gt_poses = []
+
+    res_poses = []
 
     gt0_initialized = False
     dur_t = duration
@@ -285,23 +287,22 @@ def ptudes_ekf_nc(file: str,
             ekf.processPose(pose_corr)
 
             gt_poses.append(pose_corr)
-            gt_t.append(imu.ts)  # TODO: fix me on switch to continuous time!
+            gt_t.append(ekf.ts)
+            res_poses.append(ekf.nav.pose_mat())
             if pose_corr_idx + 1 < len(gts):
                 pose_corr_idx += 1
 
         if dur_t > 0 and ts - first_ts - start_ts > dur_t:
             break
 
-    nav_poses = [ekf._navs[i].pose_mat() for i in ekf._nav_update_idxs]
-
     print(f"scanned duration: {ts - first_ts - start_ts:0.04} s")
-    print(f"updates num: {len(nav_poses)}\n")
-    if nav_poses:
-        ate_rot, ate_trans = calc_ate(nav_poses, gt_poses)
+    print(f"updates num: {len(res_poses)}\n")
+    if res_poses:
+        ate_rot, ate_trans = calc_ate(res_poses, gt_poses)
         print(f"ATE_rot:   {ate_rot:.04f} deg")
         print(f"ATE trans: {ate_trans:.04f} m")
 
-    if not ekf._navs:
+    if not ekf._logging or not ekf._navs:
         return
 
     if plot == "graphs":
@@ -418,6 +419,8 @@ def ptudes_ekf_ouster(file: str,
             "File not found, please specify a metadata file with `-m`")
     info = read_metadata_json(meta)
 
+    log_metrics = bool(plot)
+
     display_header = f"data path: {file}\n"
     display_header += f"metadata path: {meta}\n\n"
     display_header += f"scans range: {start_scan} - {end_scan}\n"
@@ -426,6 +429,7 @@ def ptudes_ekf_ouster(file: str,
     display_header += f"beams: {beams or info.format.pixels_per_column}\n"
     display_header += f"sensor: {info.prod_line}, {info.mode}\n"
     print(display_header)
+    print(f"metrics logging: {log_metrics}")
 
     packet_source = read_packet_source(file, meta=info)
 
@@ -447,7 +451,8 @@ def ptudes_ekf_ouster(file: str,
 
     stats = StreamStatsTracker(use_beams_num=32, metadata=data_source.metadata)
 
-    ekf = ESEKF()
+
+    ekf = ESEKF(_logging=log_metrics)
 
     res_t = []
     kiss_poses = []
@@ -479,6 +484,8 @@ def ptudes_ekf_ouster(file: str,
         if use_gt_guess:
             gt_traj = pu.TrajectoryEvaluator(gts, time_bounds=1.0)
 
+    imus_per_scan = 1
+
     for scan_idx, d in data_source.withScanIdx(start_scan=start_scan,
                                                end_scan=end_scan):
 
@@ -492,9 +499,19 @@ def ptudes_ekf_ouster(file: str,
             t_imu += time.monotonic() - t1
             t_imu_cnt += 1
 
+            imus_per_scan += 1
+
         elif isinstance(d, client.LidarScan):
             # yep, just count and time the scan iteration
             next(scan_tqdm_it)
+
+            if not imus_per_scan:
+                # skipping scans that doesn't have IMUs in between, this may
+                # happen when a stray lidar packet appears and breaks the stream
+                # of scans in a ScanBatcher (i.e. scans composed of packets of
+                # different frames)
+                continue
+            imus_per_scan = 0
 
             ls = d
 
@@ -511,7 +528,7 @@ def ptudes_ekf_ouster(file: str,
 
             if use_imu_prediction:
                 # EKF IMU based prediction for KissICP
-                pose_guess = ekf._nav_curr.pose_mat()
+                pose_guess = ekf.nav.pose_mat()
             elif use_gt_guess and gt_traj is not None:
                 # GT pose prediction for KissICP (for sanity tests)
                 gt_guess = gt_traj.pose_at(ts)
@@ -537,8 +554,9 @@ def ptudes_ekf_ouster(file: str,
 
             # collect metrics
             kiss_poses.append(kiss_icp.pose)
-            res_poses.append(ekf._nav_curr.pose_mat())
-            res_t.append(ekf._navs_t[-1])
+            res_poses.append(ekf.nav.pose_mat())
+
+            res_t.append(ekf.ts)
 
         if not init_stats_flag and stats.dt > init_stats_ts:
             print(stats)
@@ -546,8 +564,7 @@ def ptudes_ekf_ouster(file: str,
             print("Grav vector est: ", grav_est)
             init_stats_flag = True
 
-    if not ekf._navs:
-        return
+
 
     # log header for storing resulting poses
     header = display_header
@@ -566,11 +583,14 @@ def ptudes_ekf_ouster(file: str,
                                 header=header)
         print(f"NC GT poses saved to: {save_nc_gt_poses}")
 
-    print("\nTimings:")
-    print(f"  ESEKF imu process:      {t_imu / t_imu_cnt:.05f} s per step")
-    print(f"  ESEKF update:           {t_corr / t_corr_cnt:.05f} s per update")
-    print(f"  KissICP register frame: {t_kiss / t_corr_cnt:.05f} s per frame")
-    print(f"  Stats tracking:         {t_track / t_corr_cnt:.05f} s per frame")
+    if t_imu_cnt and t_corr_cnt:
+        print("\nTimings:")
+        print(f"  ESEKF imu process:      {t_imu / t_imu_cnt:.05f} s per step")
+        print(f"  ESEKF update:           {t_corr / t_corr_cnt:.05f} s per update")
+        print(f"  KissICP register frame: {t_kiss / t_corr_cnt:.05f} s per frame")
+        print(f"  Stats tracking:         {t_track / t_corr_cnt:.05f} s per frame")
+
+
 
     if plot == "graphs":
         gt2 = None
@@ -613,14 +633,15 @@ def ptudes_ekf_ouster(file: str,
                 res_t = res_t_matched
                 kiss_poses = kiss_poses_matched
 
-        ekf_graphs(ekf,
-                   gt=(res_t, kiss_poses),
-                   gt2=gt2,
-                   xy_plot=True,
-                   labels=[
-                       "ES EKF KissICP smoothed poses", "KissICP only poses",
-                       "GT poses"
-                   ])
+        if ekf._logging and ekf._navs:
+            ekf_graphs(ekf,
+                       gt=(res_t, kiss_poses),
+                       gt2=gt2,
+                       xy_plot=True,
+                       labels=[
+                           "ES EKF KissICP smoothed poses",
+                           "KissICP only poses", "GT poses"
+                       ])
 
         # TODO: extract me ... ?
         import matplotlib.pyplot as plt
@@ -644,7 +665,7 @@ def ptudes_ekf_ouster(file: str,
 @click.command(name="cmp")
 @click.argument("gt_file", required=True, type=click.Path(exists=True))
 @click.argument("gt_file_cmp",
-                required=True,
+                required=False,
                 type=click.Path(exists=True),
                 nargs=-1)
 @click.option("-p",
@@ -690,17 +711,23 @@ def ptudes_ekf_cmp(gt_file: str,
 
     if plot in ["graphs", "graphs_full"]:
 
-        if len(gt_file_cmp) > 1:
+        if len(gt_file_cmp) != 1:
             use_gt_frame = True
             print("\nNOTE: Enforcing --use-gt-frame because the number of "
-                  "trajectories to compare is more than one")
+                  "trajectories to compare is zero or more than one")
+
+        if not gts_cmp and plot == "graphs":
+            plot = "graphs_full"
+
 
         # combined GT for all trajectories to compare timestamps
-        cmp_min_ts = min([gc[0][0] for gc in gts_cmp])
-        cmp_max_ts = max([gc[-1][0] for gc in gts_cmp])
-        gts_comb_cmp = [
-            gc for gc in gts_all if gc[0] >= cmp_min_ts and gc[0] <= cmp_max_ts
-        ]
+        gts_comb_cmp = []
+        if gts_cmp:
+            cmp_min_ts = min([gc[0][0] for gc in gts_cmp])
+            cmp_max_ts = max([gc[-1][0] for gc in gts_cmp])
+            gts_comb_cmp = [
+                gc for gc in gts_all if gc[0] >= cmp_min_ts and gc[0] <= cmp_max_ts
+            ]
 
         if not use_gt_frame:
             # only one gt_file_cmp is present
