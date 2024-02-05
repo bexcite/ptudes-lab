@@ -174,6 +174,11 @@ compared with available ground truth automatically (in Newer College Dataset
 format) by plotting trajectories together and calculating Average Trajectory
 Error (ATE).
 
+Refer to the blog post `Lidar odometry smoothing using ES EKF and KissICP for
+Ouster sensors with IMUs
+<https://capsulesbot.com/blog/2024/02/05/esekf-smoothing-ouster-lidar-with-imu-using-kiss.html>`_
+for ES EKF formulation details and experiments described in details.
+
 For example, result of the run on ``quad-easy.bag`` from the ``collection1`` of
 NCD looks like this::
 
