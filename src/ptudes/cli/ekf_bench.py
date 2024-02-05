@@ -208,6 +208,9 @@ def ptudes_ekf_sim(duration: float,
               required=False,
               type=str,
               help="Plotting option [graphs, point_viz]")
+@click.option('--xy-plot',
+              is_flag=True,
+              help="Draw X and Y dimenstions on XY plane, instead of separate")
 @click.option("-i",
               "--imu-topic",
               required=False,
@@ -220,6 +223,7 @@ def ptudes_ekf_nc(file: str,
                   duration: float = 2.0,
                   start_ts: float = 0.0,
                   plot: Optional[str] = None,
+                  xy_plot: bool = False,
                   imu_topic: Optional[str] = None) -> None:
     """EKF with Newer College Dataset IMUs topics.
 
@@ -307,7 +311,7 @@ def ptudes_ekf_nc(file: str,
 
     if plot == "graphs":
         ekf_graphs(ekf,
-                   xy_plot=False,
+                   xy_plot=xy_plot,
                    gt=(gt_t, gt_poses),
                    labels=["ES EKF IMU + GT pose correction", "GT poses"])
     elif plot == "point_viz":

@@ -109,6 +109,7 @@ def ptudes_stat(file: str, meta: Optional[str],
         if duration and stats.dt > duration:
             break
 
+    print()
     print(stats)
     grav_est = stats.acc_mean / np.linalg.norm(stats.acc_mean)
     print("Gravity vector estimation: ", grav_est)

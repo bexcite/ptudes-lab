@@ -294,7 +294,7 @@ class ESEKF:
         resid_pa[:3] = pos - self._nav_curr.pos - self._nav_err.dpos
         Rk_inv = np.linalg.inv(Rk)
         dR_inv = np.linalg.inv(dR)
-        resid_pa[3:] = log_rot_mat(Rk_inv @ dR_inv @ rot)
+        resid_pa[3:] = log_rot_mat(dR_inv @ Rk_inv @ rot)
 
         S = Jp @ self._cov @ Jp.transpose() + meas_cov
         K = self._cov @ Jp.transpose() @ np.linalg.inv(S)

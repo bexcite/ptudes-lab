@@ -5,7 +5,7 @@ from setuptools import find_namespace_packages
 from setuptools import setup
 
 
-__version__ = '0.0.2'
+__version__ = '0.0.3'
 
 setup(
     name='ptudes-lab',
@@ -19,7 +19,9 @@ setup(
     install_requires=[
         'numpy >= 1.20',
         'ouster-sdk >= 0.10.0',
-        'rosbags >= 0.9.16'
+        'rosbags >= 0.9.16',
+        'matplotlib >= 3.5.3',
+        'kiss-icp >= 0.2.9, <3'
     ],
     entry_points={'console_scripts': ['ptudes=ptudes.cli.run:main']},
     url='https://github.com/bexcite/ptudes-lab',

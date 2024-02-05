@@ -156,6 +156,11 @@ list of keyboard shortcuts can be found `here`_
 Ouster Lidar/IMUs + KissICP + trajectory smoothing (Error-State EKF)
 ---------------------------------------------------------------------
 
+**NOTE:** Refer to the blog post `Lidar odometry smoothing using ES EKF and KissICP for
+Ouster sensors with IMUs
+<https://capsulesbot.com/blog/2024/02/05/esekf-smoothing-ouster-lidar-with-imu-using-kiss.html>`_
+for ES EKF formulation details and experiments described in details.
+
 Ouster Lidar raw ``.pcap/.bag`` recordings almost always come with
 **imu_packets** inside which may be used to get better trajectories estimation
 on some tricky cases, like tunnels with less features, fast platform movements
