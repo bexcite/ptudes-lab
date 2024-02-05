@@ -20,6 +20,7 @@ setup(
         'numpy >= 1.20',
         'ouster-sdk >= 0.10.0',
         'rosbags >= 0.9.16',
+        'matplotlib >= 3.5.3',
         'kiss-icp >= 0.2.9, <3'
     ],
     entry_points={'console_scripts': ['ptudes=ptudes.cli.run:main']},
