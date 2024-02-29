@@ -1,6 +1,7 @@
 from typing import Optional, List, Union, Iterator
 
 import numpy as np
+import io
 
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from ptudes.ins.data import IMU, _pf
 
 from ouster.sdk import client
 from ouster.sdk.client import UDPProfileLidar
+
+from PIL import Image as PILImage
 
 # Adopted from Ouster SDK with changes to work on all platforms:
 # https://github.com/ouster-lidar/ouster_example/blob/master/python/src/ouster/sdkx/bag.py
@@ -33,6 +36,7 @@ class OusterRawBagSource(client.PacketSource):
                  rate: float = 0.0,
                  lidar_topic: str = "",
                  imu_topic: str = "") -> None:
+
         if isinstance(data_path, list):
             data = [Path(p) for p in data_path]
         else:
@@ -42,6 +46,17 @@ class OusterRawBagSource(client.PacketSource):
         self._bag_reader.open()
 
         self._conns = []
+
+        
+
+        image_topics = [
+            "/alphasense_driver_ros/cam0/compressed",
+            "/alphasense_driver_ros/cam1/compressed",
+            "/alphasense_driver_ros/cam3/compressed",
+            "/alphasense_driver_ros/cam4/compressed"
+        ]
+
+
 
         if not lidar_topic and not imu_topic:
             # Use any lidar/imu_packets topics if not set anything in ctor
@@ -55,6 +70,16 @@ class OusterRawBagSource(client.PacketSource):
             self._conns = [
                 c for c in self._bag_reader.connections if c.topic in topics
             ]
+
+        
+        self._conns.extend([c for c in self._bag_reader.connections if c.topic in image_topics])
+
+        print("self.conns = ::::")
+        for c in self._conns:
+            print(f"topic = ", c.topic, ", msg_type = ", c.msgtype, ", count = ", c.msgcount)
+            # print("Def:")
+            # print(c.msgdef)
+            # break
 
         self._metadata = info
 
@@ -90,6 +115,21 @@ class OusterRawBagSource(client.PacketSource):
                 imup.buf[:] = msg.buf
                 imup.host_timestamp = ts
                 yield imup
+
+            elif (conn.msgtype == "sensor_msgs/msg/CompressedImage"):
+                # print("conn = ", dir(conn))
+                msg = self._bag_reader.deserialize(rawdata, conn.msgtype)
+                img_bytes = io.BytesIO(msg.data)
+                img = PILImage.open(img_bytes)
+                img_np = np.asarray(img)
+                print("img_np.shape = ", img_np.shape)
+                print("some vals: ", img_np[:10,:10])
+                # img.show()
+                print("img = ", img)
+                print("msg things = ", dir(msg))
+                print("type data = ", msg.data.shape)
+                print("format data = ", msg.format)
+                print("header = ", msg.header)
 
     @property
     def topics(self) -> List[str]:
