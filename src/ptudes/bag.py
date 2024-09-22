@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from rosbags.highlevel import AnyReader
 
-from ptudes.ins.data import IMU
+from ptudes.ins.data import IMU, _pf
 
 from ouster.sdk import client
 from ouster.sdk.client import UDPProfileLidar
@@ -106,7 +106,8 @@ class OusterRawBagSource(client.PacketSource):
 class IMUBagSource:
     """Read imu msgs from ROS bags"""
 
-    def __init__(self, data_path: Union[str, list],
+    def __init__(self,
+                 data_path: Union[str, list],
                  imu_topic: Optional[str] = None):
 
         if isinstance(data_path, list):
@@ -134,7 +135,6 @@ class IMUBagSource:
         else:
             self._conns += [imu_conns[0]]
 
-
     def __iter__(self) -> Iterator[IMU]:
 
         # since imu packets haven't changed since original Ouster
@@ -160,8 +160,7 @@ class IMUBagSource:
                 yield IMU(lacc, avel, msg_ts)
             elif conn.msgtype == "ouster_ros/msg/PacketMsg":
                 # Ouster imu packet decoding
-                msg_ts = ts * 1e+9
-                imu_packet = client.ImuPacket(msg.buf,
-                                              timestamp=msg_ts,
-                                              packet_format=_pf)
-                yield IMU.from_packet(imu_packet)
+                imup = client.ImuPacket(_pf.imu_packet_size + 1)
+                imup.buf[:] = msg.buf
+                imup.host_timestamp = ts * 1e+9
+                yield IMU.from_packet(imup)
