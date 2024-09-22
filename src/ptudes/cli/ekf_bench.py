@@ -6,10 +6,10 @@ import time
 import click
 from typing import Optional
 
-import ouster.client as client
-from ouster.client import ChanField
+from ouster.sdk import client
+from ouster.sdk.client import ChanField
 from ouster.sdk.util import resolve_metadata
-import ouster.sdk.pose_util as pu
+import ouster.sdk.util.pose_util as pu
 
 from ptudes.utils import (read_metadata_json, read_packet_source,
                           read_newer_college_gt, save_poses_kitti_format,

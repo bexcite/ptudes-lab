@@ -8,7 +8,7 @@ from ptudes.ins.data import GRAV, IMU, NavState,  set_blk, blk
 from ptudes.utils import vee
 
 # TODO: replace with scipy...Rotation?
-from ouster.sdk.pose_util import exp_rot_vec, log_rot_mat
+from ouster.sdk.util.pose_util import exp_rot_vec, log_rot_mat
 
 Vec3 = np.ndarray
 

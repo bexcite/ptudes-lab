@@ -4,8 +4,8 @@ from scipy.spatial.transform import Rotation
 
 from dataclasses import dataclass
 
-import ouster.client as client
-from ouster.sdk.pose_util import log_rot_mat
+from ouster.sdk import client
+from ouster.sdk.util.pose_util import log_rot_mat
 
 GRAV = 9.782940329221166
 

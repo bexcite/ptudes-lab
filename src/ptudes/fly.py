@@ -3,10 +3,10 @@ from typing import Optional, Iterable, List, Tuple
 from enum import Enum
 from abc import ABC, abstractmethod
 
-import ouster.client as client
-from ouster.viz import (PointViz, Label, ScansAccumulator)
+from ouster.sdk import client
+from ouster.sdk.viz import (PointViz, Label, ScansAccumulator)
 
-import ouster.sdk.pose_util as pu
+import ouster.sdk.util.pose_util as pu
 from ptudes.utils import estimate_apex_dolly
 
 PoseH = np.ndarray

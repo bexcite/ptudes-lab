@@ -1,15 +1,15 @@
 from typing import List, Optional
 
 import numpy as np
-import ouster.client as client
-from ouster.client import (SensorInfo, LidarScan, ChanField)
+from ouster.sdk import client
+from ouster.sdk.client import (SensorInfo, LidarScan, ChanField)
 
 from kiss_icp.config import load_config
-from kiss_icp.registration import register_frame as kregister_frame
+# from kiss_icp.registration import get_registration
 from kiss_icp.kiss_icp import KissICP
 from kiss_icp.config.parser import KISSConfig
 
-from ouster.sdk.pose_util import PoseH, log_pose
+from ouster.sdk.util.pose_util import PoseH, log_pose
 from scipy.spatial.transform import Rotation
 
 Vec3 = np.ndarray
@@ -60,7 +60,6 @@ class KissICPWrapper:
         xyz = self._xyz_lut(scan)[sel_flag]
         timestamps = self._timestamps[sel_flag]
 
-
         # TODO[pb]: This could be done differently ...
         ts = client.last_valid_column_ts(scan) * 1e-09
 
@@ -104,28 +103,27 @@ class KissICPWrapper:
             last_pose = kself.poses[-1] if kself.poses else np.eye(4)
             initial_guess = last_pose @ prediction
 
-        # Run ICP
-        new_pose = kregister_frame(
+        new_pose = self._kiss.registration.align_points_to_map(
             points=source,
-            voxel_map=kself.local_map,
+            voxel_map=self.local_map,
             initial_guess=initial_guess,
             max_correspondance_distance=3 * sigma,
             kernel=sigma / 3,
         )
-
         pose_gain = np.linalg.inv(initial_guess) @ new_pose
 
         dt = np.linalg.norm(pose_gain[:3, 3])
         drot = np.linalg.norm(
             Rotation.from_matrix(pose_gain[:3, :3]).as_rotvec())
-        
+
         self._err_dt.append(dt)
         self._err_drot.append(drot)
         self._sigmas.append(sigma)
 
         # print(f"dt = {dt:.05f}, drot = {drot:.05f}")
 
-        kself.adaptive_threshold.update_model_deviation(np.linalg.inv(initial_guess) @ new_pose)
+        kself.adaptive_threshold.update_model_deviation(
+            np.linalg.inv(initial_guess) @ new_pose)
         kself.local_map.update(frame_downsample, new_pose)
         kself.poses.append(new_pose)
         return frame, source
