@@ -542,10 +542,7 @@ def ptudes_ekf_ouster(file: str,
                 pose_guess = gt_traj0 @ gt_guess
             else:
                 # Standard constant velocity/linear KissICP prediction
-                prediction = kiss_icp._kiss.get_prediction_model()
-                last_pose = (kiss_icp._kiss.poses[-1]
-                             if kiss_icp._kiss.poses else np.eye(4))
-                pose_guess = last_pose @ prediction
+                pose_guess = kiss_icp._kiss.last_pose @ kiss_icp._kiss.last_delta
 
             t1 = time.monotonic()
             kiss_icp.register_frame(ls, initial_guess=pose_guess)

@@ -46,6 +46,7 @@ class KissICPWrapper:
 
         # using last valid column timestamp as a pose ts
         self._poses_ts = []
+        self._poses = []
 
         self._err_dt = []
         self._err_drot = []
@@ -86,7 +87,8 @@ class KissICPWrapper:
                              initial_guess: Optional[PoseH] = None):
         # Apply motion compensation
         kself = self._kiss
-        frame = kself.compensator.deskew_scan(frame, self.poses, timestamps)
+        frame = kself.compensator.deskew_scan(frame, timestamps,
+                                              kself.last_delta)
 
         # Preprocess the input cloud
         frame = kself.preprocess(frame)
@@ -94,18 +96,17 @@ class KissICPWrapper:
         # Voxelize
         source, frame_downsample = kself.voxelize(frame)
 
-        # Get motion prediction and adaptive_threshold
-        sigma = kself.get_adaptive_threshold()
+        # Get adaptive_threshold
+        sigma = kself.adaptive_threshold.get_threshold()
 
         # Compute initial_guess for ICP
         if initial_guess is None:
-            prediction = kself.get_prediction_model()
-            last_pose = kself.poses[-1] if kself.poses else np.eye(4)
-            initial_guess = last_pose @ prediction
+            initial_guess = kself.last_pose @ kself.last_delta
 
+        # Run ICP
         new_pose = self._kiss.registration.align_points_to_map(
             points=source,
-            voxel_map=self.local_map,
+            voxel_map=kself.local_map,
             initial_guess=initial_guess,
             max_correspondance_distance=3 * sigma,
             kernel=sigma / 3,
@@ -122,10 +123,17 @@ class KissICPWrapper:
 
         # print(f"dt = {dt:.05f}, drot = {drot:.05f}")
 
-        kself.adaptive_threshold.update_model_deviation(
-            np.linalg.inv(initial_guess) @ new_pose)
+        # Compute the difference between the prediction and the actual estimate
+        model_deviation = np.linalg.inv(initial_guess) @ new_pose
+
+        # Update step: threshold, local map, delta, and the last pose
+        kself.adaptive_threshold.update_model_deviation(model_deviation)
         kself.local_map.update(frame_downsample, new_pose)
-        kself.poses.append(new_pose)
+        kself.last_delta = np.linalg.inv(kself.last_pose) @ new_pose
+        kself.last_pose = new_pose
+
+        self.poses.append(new_pose)
+
         return frame, source
 
     @property
@@ -133,7 +141,7 @@ class KissICPWrapper:
         """Get linear velocity estimate from kiss icp poses"""
         if len(self.poses) < 2:
             return np.zeros(3)
-        prediction = self._kiss.get_prediction_model()
+        prediction = self._kiss.last_delta
         dt = self.poses_ts[-1] - self.poses_ts[-2]
         return prediction[:3, 3] / dt
 
@@ -147,7 +155,7 @@ class KissICPWrapper:
     @property
     def poses(self) -> List[PoseH]:
         """Get all poses"""
-        return self._kiss.poses
+        return self._poses
 
     @property
     def poses_ts(self) -> List[float]:
