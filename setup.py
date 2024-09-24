@@ -5,7 +5,7 @@ from setuptools import find_namespace_packages
 from setuptools import setup
 
 
-__version__ = '0.0.4.dev0'
+__version__ = '0.0.5'
 
 setup(
     name='ptudes-lab',
