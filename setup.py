@@ -5,7 +5,7 @@ from setuptools import find_namespace_packages
 from setuptools import setup
 
 
-__version__ = '0.0.3'
+__version__ = '0.0.5'
 
 setup(
     name='ptudes-lab',
@@ -18,10 +18,13 @@ setup(
     package_dir={'': 'src'},
     install_requires=[
         'numpy >= 1.20',
-        'ouster-sdk >= 0.10.0',
+        # Need to comment out ouster-sdk, because it hard depend on kiss-icp==0.4.0
+        # which is not compatible with what is supported here, kiss-icp >= 1.0.0
+        # So please, install ouster-sdk of version >= 0.11.0 manually
+        # 'ouster-sdk >= 0.12.0',
         'rosbags >= 0.9.16',
         'matplotlib >= 3.5.3',
-        'kiss-icp >= 0.2.9, <3'
+        'kiss-icp >= 1.0.0, <3'
     ],
     entry_points={'console_scripts': ['ptudes=ptudes.cli.run:main']},
     url='https://github.com/bexcite/ptudes-lab',

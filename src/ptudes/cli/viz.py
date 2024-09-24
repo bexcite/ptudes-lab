@@ -3,12 +3,12 @@
 import click
 from typing import Optional
 
-import ouster.client as client
+from ouster.sdk import client
 from ouster.sdk.util import resolve_metadata
 
 from ptudes.utils import (read_metadata_json, read_packet_source)
 
-from ouster.viz import PointViz, LidarScanViz, SimpleViz
+from ouster.sdk.viz import PointViz, LidarScanViz, SimpleViz
 
 @click.command(name="viz")
 @click.argument(

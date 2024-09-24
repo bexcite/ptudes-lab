@@ -3,12 +3,12 @@ from typing import Optional
 
 import numpy as np
 
-import ouster.client as client
+from ouster.sdk import client, open_source
 from ouster.sdk.util import resolve_metadata
-import ouster.sdk.pose_util as pu
-from ouster.viz import (ScansAccumulator, Label)
+import ouster.sdk.util.pose_util as pu
+from ouster.sdk.viz import (ScansAccumulator, Label)
 
-import ouster.viz.scans_accum as scans_accum_module
+import ouster.sdk.viz.scans_accum as scans_accum_module
 
 from ptudes.utils import (make_point_viz, spin, estimate_apex_dolly,
                           map_points_num, prune_trajectory, read_metadata_json,

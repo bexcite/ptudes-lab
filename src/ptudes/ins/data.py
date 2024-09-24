@@ -4,10 +4,15 @@ from scipy.spatial.transform import Rotation
 
 from dataclasses import dataclass
 
-import ouster.client as client
-from ouster.sdk.pose_util import log_rot_mat
+from ouster.sdk import client
+from ouster.sdk.util.pose_util import log_rot_mat
 
 GRAV = 9.782940329221166
+
+# since imu packets haven't changed since original Ouster
+# packets form we can use any sane packet format to parse them
+_pf = client._client.PacketFormat.from_profile(
+    client.UDPProfileLidar.PROFILE_LIDAR_RNG19_RFL8_SIG16_NIR16, 64, 16)
 
 @dataclass
 class IMU:
@@ -21,9 +26,17 @@ class IMU:
                     dt: float = 0.01,
                     _intr_rot: Optional[np.ndarray] = None) -> "IMU":
         imu = IMU()
-        imu.ts = imu_packet.sys_ts / 10**9
-        imu.lacc = GRAV * imu_packet.accel
-        imu.avel = np.pi * imu_packet.angular_vel / 180.0
+        imu.ts = _pf.imu_sys_ts(imu_packet.buf) / 10**9
+        imu.lacc = GRAV * np.array([
+            _pf.imu_la_x(imu_packet.buf),
+            _pf.imu_la_y(imu_packet.buf),
+            _pf.imu_la_z(imu_packet.buf)
+        ])
+        imu.avel = np.pi * np.array([
+            _pf.imu_av_x(imu_packet.buf),
+            _pf.imu_av_y(imu_packet.buf),
+            _pf.imu_av_z(imu_packet.buf)
+        ]) / 180
         if _intr_rot is not None:
             imu.lacc = _intr_rot @ imu.lacc
             imu.avel = _intr_rot @ imu.avel

@@ -1,8 +1,8 @@
 from typing import Optional
 
-from ouster.viz import PointViz, Cloud
+from ouster.sdk.viz import PointViz, Cloud
 
-import ouster.sdk.pose_util as pu
+import ouster.sdk.util.pose_util as pu
 
 import numpy as np
 

@@ -1,10 +1,10 @@
 from typing import Optional, Union, Dict, Iterator, Tuple
 
-import ouster.client as client
-import ouster.client._client as _client
-from ouster.client import (PacketSource, UDPProfileLidar, FieldDType,
-                           ChanField, LidarScan, LidarPacket, ImuPacket,
-                           SensorInfo)
+from ouster.sdk import client
+import ouster.sdk.client._client as _client
+from ouster.sdk.client import (PacketSource, UDPProfileLidar, FieldDType,
+                               ChanField, LidarScan, LidarPacket, ImuPacket,
+                               SensorInfo)
 
 from ptudes.ins.data import IMU
 

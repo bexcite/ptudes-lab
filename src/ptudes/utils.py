@@ -7,11 +7,11 @@ import numpy as np
 from pathlib import Path
 
 import weakref
-import ouster.client as client
-import ouster.viz as viz
-import ouster.pcap as pcap
-from ouster.viz import (PointViz, ScansAccumulator, add_default_controls)
-import ouster.sdk.pose_util as pu
+from ouster.sdk import client
+import ouster.sdk.viz as viz
+import ouster.sdk.pcap as pcap
+from ouster.sdk.viz import (PointViz, ScansAccumulator, add_default_controls)
+import ouster.sdk.util.pose_util as pu
 
 from scipy.spatial.transform import Rotation
 

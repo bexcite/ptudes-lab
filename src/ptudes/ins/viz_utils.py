@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
 
-import ouster.sdk.pose_util as pu
+import ouster.sdk.util.pose_util as pu
 from scipy.spatial.transform import Rotation
 
 from ptudes.ins.data import NavState, blk
@@ -317,7 +317,7 @@ def ekf_error_graphs(ekf_gt, ekf, ekf_dr=None):
 def ekf_viz(ekf):
     """Visualize 3D poses and nav state histories"""
 
-    import ouster.viz as viz
+    import ouster.sdk.viz as viz
     from ptudes.utils import (make_point_viz)
     from ptudes.viz_utils import PointCloud
     point_viz = make_point_viz(f"Traj: poses = {len(ekf._navs)}",

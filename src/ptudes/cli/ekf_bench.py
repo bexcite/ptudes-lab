@@ -6,10 +6,10 @@ import time
 import click
 from typing import Optional
 
-import ouster.client as client
-from ouster.client import ChanField
+from ouster.sdk import client
+from ouster.sdk.client import ChanField
 from ouster.sdk.util import resolve_metadata
-import ouster.sdk.pose_util as pu
+import ouster.sdk.util.pose_util as pu
 
 from ptudes.utils import (read_metadata_json, read_packet_source,
                           read_newer_college_gt, save_poses_kitti_format,
@@ -542,10 +542,7 @@ def ptudes_ekf_ouster(file: str,
                 pose_guess = gt_traj0 @ gt_guess
             else:
                 # Standard constant velocity/linear KissICP prediction
-                prediction = kiss_icp._kiss.get_prediction_model()
-                last_pose = (kiss_icp._kiss.poses[-1]
-                             if kiss_icp._kiss.poses else np.eye(4))
-                pose_guess = last_pose @ prediction
+                pose_guess = kiss_icp._kiss.last_pose @ kiss_icp._kiss.last_delta
 
             t1 = time.monotonic()
             kiss_icp.register_frame(ls, initial_guess=pose_guess)
