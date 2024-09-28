@@ -13,7 +13,11 @@ from ptudes.ins.data import IMU, _pf
 from ouster.sdk import client
 from ouster.sdk.client import UDPProfileLidar
 
+from pprint import pprint
+
 from PIL import Image as PILImage
+
+import cv2
 
 # Adopted from Ouster SDK with changes to work on all platforms:
 # https://github.com/ouster-lidar/ouster_example/blob/master/python/src/ouster/sdkx/bag.py
@@ -47,8 +51,6 @@ class OusterRawBagSource(client.PacketSource):
 
         self._conns = []
 
-        
-
         image_topics = [
             "/alphasense_driver_ros/cam0/compressed",
             "/alphasense_driver_ros/cam1/compressed",
@@ -56,7 +58,8 @@ class OusterRawBagSource(client.PacketSource):
             "/alphasense_driver_ros/cam4/compressed"
         ]
 
-
+        print("all connections:")
+        pprint([f"{c.topic} : {c.msgtype}" for c in self._bag_reader.connections])
 
         if not lidar_topic and not imu_topic:
             # Use any lidar/imu_packets topics if not set anything in ctor
@@ -71,12 +74,14 @@ class OusterRawBagSource(client.PacketSource):
                 c for c in self._bag_reader.connections if c.topic in topics
             ]
 
-        
-        self._conns.extend([c for c in self._bag_reader.connections if c.topic in image_topics])
+        self._conns.extend([
+            c for c in self._bag_reader.connections if c.topic in image_topics
+        ])
 
         print("self.conns = ::::")
         for c in self._conns:
-            print(f"topic = ", c.topic, ", msg_type = ", c.msgtype, ", count = ", c.msgcount)
+            print(f"topic = ", c.topic, ", msg_type = ", c.msgtype,
+                  ", count = ", c.msgcount)
             # print("Def:")
             # print(c.msgdef)
             # break
@@ -117,19 +122,22 @@ class OusterRawBagSource(client.PacketSource):
                 yield imup
 
             elif (conn.msgtype == "sensor_msgs/msg/CompressedImage"):
-                # print("conn = ", dir(conn))
+                print("conn = ", dir(conn))
                 msg = self._bag_reader.deserialize(rawdata, conn.msgtype)
                 img_bytes = io.BytesIO(msg.data)
                 img = PILImage.open(img_bytes)
                 img_np = np.asarray(img)
                 print("img_np.shape = ", img_np.shape)
-                print("some vals: ", img_np[:10,:10])
+                print("some vals: ", img_np[:10, :10])
                 # img.show()
+                cv2.imshow("img", img_np)
+                cv2.waitKey(1)
                 print("img = ", img)
                 print("msg things = ", dir(msg))
                 print("type data = ", msg.data.shape)
                 print("format data = ", msg.format)
                 print("header = ", msg.header)
+                input()
 
     @property
     def topics(self) -> List[str]:
