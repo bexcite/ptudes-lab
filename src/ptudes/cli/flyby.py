@@ -2,13 +2,18 @@ import click
 from typing import Optional
 
 import numpy as np
+import threading
 
 from ouster.sdk import client, open_source
 from ouster.sdk.util import resolve_metadata
 import ouster.sdk.util.pose_util as pu
-from ouster.sdk.viz import (ScansAccumulator, Label)
+from ouster.sdk.viz import Label
 
-import ouster.sdk.viz.scans_accum as scans_accum_module
+from ouster.sdk.viz.accumulators import LidarScanVizAccumulators
+from ouster.sdk.viz.accumulators_config import (LidarScanVizAccumulatorsConfig, MAP_MAX_POINTS_NUM, MAP_SELECT_RATIO)
+from ouster.sdk.viz.model import LidarScanVizModel
+
+# import ouster.sdk.viz.scans_accum as scans_accum_module
 
 from ptudes.utils import (make_point_viz, spin, estimate_apex_dolly,
                           map_points_num, prune_trajectory, read_metadata_json,
@@ -19,8 +24,8 @@ from ptudes.fly import (FlyingState, FState, BuildingState,
                         CameraTransitionState, CoursingState)
 
 # max map/track cloud object sizes on init ("fixes" crash in ScansAccumulator)
-scans_accum_module.MAP_INIT_POINTS_NUM = scans_accum_module.MAP_MAX_POINTS_NUM
-scans_accum_module.TRACK_INIT_POINTS_NUM = scans_accum_module.TRACK_MAX_POINTS_NUM
+# scans_accum_module.MAP_INIT_POINTS_NUM = scans_accum_module.MAP_MAX_POINTS_NUM
+# scans_accum_module.TRACK_INIT_POINTS_NUM = scans_accum_module.TRACK_MAX_POINTS_NUM
 
 @click.command(name="flyby")
 @click.argument(
@@ -124,11 +129,31 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
         rate_ind = rates.index(1.0)
 
     point_viz = make_point_viz(title="Flyby")
-    scans_accum = ScansAccumulator(scans_source.metadata,
-                                   point_viz=point_viz,
-                                   map_enabled=True,
-                                   map_max_points=MAP_MAX_POINTS_NUM,
-                                   map_select_ratio=accum_map_ratio)
+
+    accum_config = LidarScanVizAccumulatorsConfig(
+        accum_max_num=0,
+        accum_min_dist_meters=0,
+        accum_min_dist_num=1,
+        map_enabled=True,
+        map_select_ratio=accum_map_ratio,
+        map_max_points=MAP_MAX_POINTS_NUM)
+
+    scan_viz_model = LidarScanVizModel([scans_source.metadata],
+                                       _img_aspect_ratio=0)
+    print("scan_viz_model = ", scan_viz_model)
+    print("sensors = ", scan_viz_model._sensors)
+    print("sorted cloud mode names = ", scan_viz_model.sorted_cloud_mode_names())
+    a = [sensor._cloud_modes.keys() for sensor in scan_viz_model._sensors]
+    print("a = ", a)
+
+    scans_accum = LidarScanVizAccumulators(scan_viz_model, point_viz,
+                                           accum_config, threading.Lock())
+
+    # scans_accum = ScansAccumulator(scans_source.metadata,
+    #                                point_viz=point_viz,
+    #                                map_enabled=True,
+    #                                map_max_points=MAP_MAX_POINTS_NUM,
+    #                                map_select_ratio=accum_map_ratio)
 
     # initialize flyby osd
     flyby_osd = Label("", 1, 1, align_right=True)
@@ -165,7 +190,7 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
         pause_str = "" if not pause else " (PAUSED)"
         osd_str = f"map of scans: {start_scan} - {end_scan}"
         osd_str += f"\nmap num points: {map_points_num(scans_accum)} " + (
-            "(O)" if scans_accum._map_overflow else "")
+            "(O)" if scans_accum._ma._map_overflow else "")
         osd_str += f"\nscans downsample ratio: {accum_map_ratio:.03f}"
         osd_str += f"\nstate: {fstate.name.replace('_', '..')}"
         osd_str += f"\nplayback: {rates[rate_ind]} {pause_str}"

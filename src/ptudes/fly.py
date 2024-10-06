@@ -4,7 +4,8 @@ from enum import Enum
 from abc import ABC, abstractmethod
 
 from ouster.sdk import client
-from ouster.sdk.viz import (PointViz, Label, ScansAccumulator)
+from ouster.sdk.viz import (PointViz, Label)
+from ouster.sdk.viz.accumulators import LidarScanVizAccumulators
 
 import ouster.sdk.util.pose_util as pu
 from ptudes.utils import estimate_apex_dolly
@@ -40,7 +41,7 @@ class BuildingState(FState):
 
     def __init__(self,
                  scan_source: Iterable[client.LidarScan],
-                 scans_accum: ScansAccumulator,
+                 scans_accum: LidarScanVizAccumulators,
                  start_scan: Optional[int] = None,
                  end_scan: Optional[int] = None,
                  min_max: Optional[np.ndarray] = None,
@@ -84,7 +85,8 @@ class BuildingState(FState):
             scan = self._next_scan()
 
             # draw map points
-            self._scans_accum.update(scan)
+            self._scans_accum._ma._model.update([scan])
+            self._scans_accum.update([scan])
             self._scans_accum.draw(update=False)
 
             if self._poses is not None:

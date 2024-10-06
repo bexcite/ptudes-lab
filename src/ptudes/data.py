@@ -1,7 +1,7 @@
 from typing import Optional, Union, Dict, Iterator, Tuple
 
 from ouster.sdk import client
-import ouster.sdk.client._client as _client
+import ouster.sdk._bindings.client as _client
 from ouster.sdk.client import (PacketSource, UDPProfileLidar, FieldDType,
                                ChanField, LidarScan, LidarPacket, ImuPacket,
                                SensorInfo)
