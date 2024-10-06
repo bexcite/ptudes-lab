@@ -11,7 +11,8 @@ GRAV = 9.782940329221166
 
 # since imu packets haven't changed since original Ouster
 # packets form we can use any sane packet format to parse them
-_pf = client._client.PacketFormat.from_profile(
+import ouster.sdk._bindings.client as _client
+_pf = _client.PacketFormat.from_profile(
     client.UDPProfileLidar.PROFILE_LIDAR_RNG19_RFL8_SIG16_NIR16, 64, 16)
 
 @dataclass

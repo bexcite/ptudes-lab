@@ -10,7 +10,8 @@ import weakref
 from ouster.sdk import client
 import ouster.sdk.viz as viz
 import ouster.sdk.pcap as pcap
-from ouster.sdk.viz import (PointViz, ScansAccumulator, add_default_controls)
+from ouster.sdk.viz import (PointViz, add_default_controls)
+from ouster.sdk.viz.accumulators import LidarScanVizAccumulators
 import ouster.sdk.util.pose_util as pu
 
 from scipy.spatial.transform import Rotation
@@ -111,12 +112,12 @@ def estimate_apex_dolly(min_max: np.ndarray, fov_deg: float) -> float:
     return max(-100, 100 * np.log(max(0.001, D) / 50.0))
 
 
-def map_points_num(sa: ScansAccumulator) -> int:
+def map_points_num(sa: LidarScanVizAccumulators) -> int:
     """Helper to extract the number of points in the map"""
-    if sa._map_overflow:
-        return sa._map_xyz.shape[0]
+    if sa._ma._map_overflow:
+        return sa._ma._map_xyz.shape[0]
     else:
-        return sa._map_idx
+        return sa._ma._map_idx
 
 
 def prune_trajectory(traj_poses: pu.TrajPoses,

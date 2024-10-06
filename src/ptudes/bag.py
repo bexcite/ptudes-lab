@@ -139,7 +139,7 @@ class IMUBagSource:
 
         # since imu packets haven't changed since original Ouster
         # packets form we can use any sane packet format to parse them
-        _pf = client._client.PacketFormat.from_profile(
+        _pf = ouster.sdk._bindings.client.PacketFormat.from_profile(
             UDPProfileLidar.PROFILE_LIDAR_RNG19_RFL8_SIG16_NIR16, 64, 16)
 
         for conn, ts, rawdata in self._bag_reader.messages(
