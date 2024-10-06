@@ -140,20 +140,9 @@ def ptudes_flyby(file: str, meta: Optional[str], kitti_poses: Optional[str],
 
     scan_viz_model = LidarScanVizModel([scans_source.metadata],
                                        _img_aspect_ratio=0)
-    print("scan_viz_model = ", scan_viz_model)
-    print("sensors = ", scan_viz_model._sensors)
-    print("sorted cloud mode names = ", scan_viz_model.sorted_cloud_mode_names())
-    a = [sensor._cloud_modes.keys() for sensor in scan_viz_model._sensors]
-    print("a = ", a)
 
     scans_accum = LidarScanVizAccumulators(scan_viz_model, point_viz,
                                            accum_config, threading.Lock())
-
-    # scans_accum = ScansAccumulator(scans_source.metadata,
-    #                                point_viz=point_viz,
-    #                                map_enabled=True,
-    #                                map_max_points=MAP_MAX_POINTS_NUM,
-    #                                map_select_ratio=accum_map_ratio)
 
     # initialize flyby osd
     flyby_osd = Label("", 1, 1, align_right=True)
