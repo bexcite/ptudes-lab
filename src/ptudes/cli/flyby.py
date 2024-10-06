@@ -10,7 +10,9 @@ import ouster.sdk.util.pose_util as pu
 from ouster.sdk.viz import Label
 
 from ouster.sdk.viz.accumulators import LidarScanVizAccumulators
-from ouster.sdk.viz.accumulators_config import (LidarScanVizAccumulatorsConfig, MAP_MAX_POINTS_NUM, MAP_SELECT_RATIO)
+from ouster.sdk.viz.accumulators_config import (LidarScanVizAccumulatorsConfig,
+                                                MAP_MAX_POINTS_NUM,
+                                                MAP_SELECT_RATIO)
 from ouster.sdk.viz.model import LidarScanVizModel
 
 # import ouster.sdk.viz.scans_accum as scans_accum_module
@@ -22,10 +24,6 @@ from ptudes.utils import (make_point_viz, spin, estimate_apex_dolly,
 
 from ptudes.fly import (FlyingState, FState, BuildingState,
                         CameraTransitionState, CoursingState)
-
-# max map/track cloud object sizes on init ("fixes" crash in ScansAccumulator)
-# scans_accum_module.MAP_INIT_POINTS_NUM = scans_accum_module.MAP_MAX_POINTS_NUM
-# scans_accum_module.TRACK_INIT_POINTS_NUM = scans_accum_module.TRACK_MAX_POINTS_NUM
 
 @click.command(name="flyby")
 @click.argument(
