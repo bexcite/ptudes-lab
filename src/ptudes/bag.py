@@ -212,3 +212,14 @@ class IMUBagSource:
                 imup.buf[:] = msg.buf
                 imup.host_timestamp = ts * 1e+9
                 yield IMU.from_packet(imup)
+
+
+def print_bag_info(filename: str) -> None:
+    """Print ROS bag info by filename."""
+    from rosbags.highlevel import AnyReader
+
+    with AnyReader([Path(filename)]) as reader:
+        print(f"Bag file: {filename}")
+        print("Connections:")
+        for connection in reader.connections:
+            print(f"  - Topic: {connection.topic}, Type: {connection.msgtype}")

@@ -5,6 +5,7 @@ from ptudes.cli.viz import ptudes_viz
 from ptudes.cli.stat import ptudes_stat
 # from ptudes.cli.odom import ptudes_odom
 from ptudes.cli.ekf_bench import ptudes_ekf_bench
+from ptudes.cli.bag import ptudes_bag
 
 @click.group(name="ptudes")
 def ptudes_cli() -> None:
@@ -18,6 +19,8 @@ ptudes_cli.add_command(ptudes_flyby)
 ptudes_cli.add_command(ptudes_viz)
 # ptudes_cli.add_command(ptudes_odom)
 ptudes_cli.add_command(ptudes_stat)
+
+ptudes_cli.add_command(ptudes_bag)
 
 ptudes_cli.add_command(ptudes_ekf_bench)
 
